@@ -213,13 +213,15 @@ force_release_lock() {
     local holder_pid=$(cat "$LOCK_FILE" 2>/dev/null)
     
     if [[ -n "$holder_pid" ]]; then
-        log_warn "EMERGENCY: Breaking environment lock held by process [$holder_pid]..."
-        # Attempt to kill the stuck process if it exists.
-        if kill -0 "$holder_pid" 2>/dev/null; then
+        # SECURITY: Never kill yourself.
+        if [[ "$holder_pid" == "$$" ]]; then
+            log_sys "Force release requested by lock holder. Skipping self-termination."
+        elif kill -0 "$holder_pid" 2>/dev/null; then
+            log_warn "EMERGENCY: Breaking environment lock held by process [$holder_pid]..."
             log_info "Terminating stuck process [$holder_pid]..."
-            # SIGTERM (15): Polite request to terminate. Allows the process to run its 'trap' cleanup.
-            # SIGKILL (9): Immediate forced termination by the kernel. No cleanup possible.
             kill -15 "$holder_pid" 2>/dev/null || kill -9 "$holder_pid" 2>/dev/null
+        else
+            log_warn "EMERGENCY: Breaking environment lock (process [$holder_pid] is already dead)..."
         fi
     else
         log_warn "EMERGENCY: Breaking environment lock (no active PID found in lock file)..."

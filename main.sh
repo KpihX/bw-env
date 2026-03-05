@@ -94,7 +94,24 @@ EXIT CODES:
 EOF
 }
 
-# --- 4. Core Logic: Unified Unlock & Synchronization ---
+# notify_daemon: Internal helper to signal the background service.
+# $1: Signal (SIGUSR1 for Wake, SIGUSR2 for Pause) | $2: Action Name
+function notify_daemon() {
+    local sig="$1"
+    local action="$2"
+    if [[ -f "$DAEMON_PID_FILE" ]]; then
+        local daemon_pid=$(cat "$DAEMON_PID_FILE")
+        if [[ -n "$daemon_pid" ]] && kill -0 "$daemon_pid" 2>/dev/null; then
+            kill -"$sig" "$daemon_pid" 2>/dev/null
+            log_info "Background daemon [PID $daemon_pid] notified: $action."
+        else
+            log_warn "Background daemon is not running. Signal $sig ($action) skipped."
+        fi
+    else
+        log_warn "Background daemon is not running. Signal $sig ($action) skipped."
+    fi
+}
+
 # $1: Mode (Optional '--daemon' to prevent infinite retry loops in background)
 function unlock_unified() {
     local run_mode="$1"
@@ -103,14 +120,14 @@ function unlock_unified() {
     
     # --- 4.1. Idempotency Check ---
     # If 'unlock' is requested but environment is already active, skip to avoid redundant prompts.
-    # Note: 'sync' command always proceeds to ensure data freshness.
     if [[ "$COMMAND" == "unlock" ]] && [[ -f "$TEMP_ENV" ]] && bw status | grep -q '"status":"unlocked"'; then
         log_info "Environment is already active. Use 'sync' to force an update."
+        # SECURITY: Even if already active, ensure the daemon is awake if called manually.
+        [[ "$run_mode" != "--daemon" ]] && notify_daemon "SIGUSR1" "Resume Sync"
         return 0
     fi
 
     # --- 4.2. Concurrency Control ---
-    # Acquire exclusive lock to prevent race conditions during write operations.
     acquire_lock
 
     log_info "Initiating Unified Salted Unlock sequence..."
@@ -118,13 +135,12 @@ function unlock_unified() {
     local error=""
     while true; do
         # --- 4.3. Password Capture (Retry Loop) ---
-        # If we already have a session and a GPG key (e.g., daemon sync), we skip the prompt.
         if [[ -n "$BW_SESSION" ]] && [[ -n "$GPG_KEY" ]]; then
             log_info "Active session and GPG key detected in RAM bridge. Skipping password prompt."
             break
         fi
 
-        # Check attempt limit to prevent brute-force or accidental loops.
+        # Check attempt limit
         ((attempts++))
         if [[ $attempts -gt $max_attempts ]]; then
             log_err "Maximum authentication attempts ($max_attempts) reached. Aborting."
@@ -132,7 +148,6 @@ function unlock_unified() {
             exit "$EXIT_MAX_ATTEMPTS"
         fi
 
-        # Prompt for password. If user cancels (Exit Code 2), we exit the script immediately.
         prompt_master_password "🔑 BW-ENV Master Unlock" "Enter your Vaultwarden Master Password (empty to skip):" "$error"
         EXIT_CODE=$?
         if [[ $EXIT_CODE -eq "$EXIT_USER_CANCEL" ]]; then
@@ -150,7 +165,6 @@ function unlock_unified() {
             log_info "Bitwarden session established and shared via RAM bridge."
             
             # --- 4.4.1. Key Derivation (Salted Hash) ---
-            # We derive the GPG key immediately after a successful unlock.
             log_info "Generating salted cryptographic key for local storage..."
             GPG_KEY=$(derive_key "$MASTER_PASS")
             if [[ -n "$GPG_KEY" ]]; then
@@ -159,27 +173,6 @@ function unlock_unified() {
             else
                 log_err "Key derivation critical failure."
                 exit "$EXIT_CRYPTO_ERR"
-            fi
-
-            # --- 4.4.2. Daemon Wake-up / Auto-Start ---
-            # If this was a manual unlock, ensure the background daemon is active.
-            if [[ "$run_mode" != "--daemon" ]]; then
-                local daemon_running=false
-                if [[ -f "$DAEMON_PID_FILE" ]]; then
-                    local daemon_pid=$(cat "$DAEMON_PID_FILE")
-                    if kill -0 "$daemon_pid" 2>/dev/null; then
-                        daemon_running=true
-                        if kill -SIGUSR1 "$daemon_pid" 2>/dev/null; then
-                            log_info "Background daemon [PID $daemon_pid] notified to resume synchronization."
-                            log_sys "Manual unlock detected. Sent wake-up signal (SIGUSR1) to daemon [PID $daemon_pid]."
-                        fi
-                    fi
-                fi
-
-                if [[ "$daemon_running" == false ]]; then
-                    log_info "Background daemon is not running. Starting synchronization service..."
-                    systemctl --user start bw-env-sync.service 2>/dev/null
-                fi
             fi
             break
         else
@@ -213,8 +206,6 @@ function unlock_unified() {
     # --- 4.8. Data Transformation (JSON to Shell) ---
     log_info "Processing custom fields into shell environment variables..."
     # SECURITY: Sanitize field names to prevent injection. 
-    # 1. Replace any non-alphanumeric character with an underscore.
-    # 2. Ensure the name does not start with a digit (prepend underscore if it does).
     ENV_DATA=$(echo "$ITEM_JSON" | jq -r '.fields[] | select(.value != null) | 
         .name as $raw_name | 
         ($raw_name | gsub("[^a-zA-Z0-9_]"; "_") | sub("^[0-9]"; "_\(.)")) as $safe_name | 
@@ -249,7 +240,6 @@ function unlock_unified() {
     fi
     
     # --- 4.11. Timestamp Update ---
-    # Record the success time for the 'status' command.
     if [[ -n "$LAST_SYNC_FILE" ]]; then
         date "+%Y-%m-%d %H:%M:%S" > "$LAST_SYNC_FILE"
         chmod 600 "$LAST_SYNC_FILE"
@@ -257,15 +247,23 @@ function unlock_unified() {
 
     log_info "Unified Sync & Unlock complete. Secrets are now active."
     release_lock
+
+    # --- 4.12. Daemon Notification ---
+    # SECURITY: Notify AFTER releasing the lock so the daemon can acquire it without conflict.
+    [[ "$run_mode" != "--daemon" ]] && notify_daemon "SIGUSR1" "Resume Sync"
+
     return "$EXIT_SUCCESS"
 }
 
 # --- 5. Security: The Emergency Lockdown ---
+# $1: Mode (Optional '--daemon' to prevent signal loops)
 function lock_vault() {
+    local run_mode="$1"
     # --- 5.1. Idempotency Check ---
-    # If already locked, skip the redundant sequence.
     if [[ ! -f "$TEMP_ENV" ]] && [[ ! -f "$SESSION_FILE" ]] && ! bw status | grep -q '"status":"unlocked"'; then
         log_info "Environment is already locked."
+        # SECURITY: Even if already locked, ensure the daemon is paused if called manually.
+        [[ "$run_mode" != "--daemon" ]] && notify_daemon "SIGUSR2" "Pause Sync"
         return "$EXIT_SUCCESS"
     fi
 
@@ -291,21 +289,17 @@ function lock_vault() {
     bw lock
     clear_session # Wipes and deletes the shared session file.
 
-    # 5.3.2. Daemon Pause
-    # Signal the daemon to enter PAUSED state immediately.
-    if [[ -f "$DAEMON_PID_FILE" ]]; then
-        local daemon_pid=$(cat "$DAEMON_PID_FILE")
-        if kill -SIGUSR2 "$daemon_pid" 2>/dev/null; then
-            log_sys "Manual lock detected. Sent pause signal (SIGUSR2) to daemon [PID $daemon_pid]."
-        fi
-    fi
-    
     # 5.4. Flush GPG agent memory.
     log_info "Flushing GPG agent memory..."
     gpg-connect-agent reloadagent /bye
     
     log_info "Lockdown successful. Environment is now completely cold."
     release_lock
+
+    # 5.3.2. Daemon Notification
+    # SECURITY: Notify AFTER releasing the lock.
+    [[ "$run_mode" != "--daemon" ]] && notify_daemon "SIGUSR2" "Pause Sync"
+
     return "$EXIT_SUCCESS"
 }
 
@@ -325,8 +319,6 @@ function purge_all() {
     systemctl --user stop bw-env-sync.service 2>/dev/null
     
     # 2. Execute a standard lockdown first.
-    # This triggers global revocation and clears RAM caches/bridges,
-    # but keeps KEYS_REGISTRY briefly for the parent shell.
     log_info "Initiating global revocation..."
     broadcast_purge
     
@@ -336,8 +328,6 @@ function purge_all() {
     wipe_file "$SESSION_FILE"
     wipe_file "$GPG_BRIDGE_FILE"
     wipe_file "$SUBS_REGISTRY"
-    # Note: We do NOT wipe KEYS_REGISTRY here to allow the parent shell to read it.
-    # It will be cleaned up by the next 'unlock' or manual 'rm'.
     
     # 4. Securely wipe the persistent disk cache.
     log_info "Destroying persistent disk backup ($CACHE_GPG)..."
@@ -356,7 +346,6 @@ function purge_all() {
 # --- 6. Resilience: Cold Cache Restoration ---
 function decrypt_cache() {
     # --- 6.1. Idempotency Check ---
-    # If cache is already in RAM, skip restoration.
     if [[ -f "$TEMP_ENV" ]]; then
         log_info "Environment cache is already active in RAM."
         return "$EXIT_SUCCESS"
@@ -426,18 +415,16 @@ function show_logs() {
 }
 
 # --- 7. CLI Entry Point ---
-# Check for --daemon or --force flags in arguments to adapt behavior.
 DAEMON_FLAG=""
 [[ "$*" == *"--daemon"* ]] && DAEMON_FLAG="--daemon"
 
 if [[ "$*" == *"--force"* ]]; then
     force_release_lock
-    exit "$EXIT_SUCCESS"
 fi
 
 case "$1" in
     unlock|sync) unlock_unified "$DAEMON_FLAG" ;;
-    lock)        lock_vault ;;
+    lock)        lock_vault "$DAEMON_FLAG" ;;
     purge)       purge_all ;;
     decrypt)     decrypt_cache ;;
     restart)
@@ -472,7 +459,6 @@ case "$1" in
         ;;
     logs)        
         shift
-        # Handle -n or --lines argument
         local lines=20
         [[ "$1" == "-n" ]] && { lines="$2"; shift 2; }
         show_logs "$lines"
@@ -480,12 +466,10 @@ case "$1" in
     help|--help) show_help ;;
     status)
         echo "=== BW-ENV STATUS (ATOMIC & SHARED) ==="
-
-        # Daemon Status Check
         daemon_status="❌ STOPPED"
         if [[ -n "$DAEMON_PID_FILE" ]] && [[ -f "$DAEMON_PID_FILE" ]]; then
-            d_pid=$(cat "$DAEMON_PID_FILE")
-            if kill -0 "$d_pid" 2>/dev/null; then
+            d_pid=$(cat "$DAEMON_PID_FILE" 2>/dev/null)
+            if [[ -n "$d_pid" ]] && kill -0 "$d_pid" 2>/dev/null; then
                 d_state="UNKNOWN"
                 [[ -f "$DAEMON_STATE_FILE" ]] && d_state=$(cat "$DAEMON_STATE_FILE")
                 if [[ "$d_state" == "PAUSED" ]]; then
@@ -496,27 +480,26 @@ case "$1" in
             fi
         fi
         echo "Sync Daemon:    $daemon_status"
-        
         last_sync="NEVER"
         [[ -f "$LAST_SYNC_FILE" ]] && last_sync=$(cat "$LAST_SYNC_FILE")
         echo "Last Sync:      $last_sync"
-
         [[ -f "$TEMP_ENV" ]] && echo "RAM Cache:      ✅ ACTIVE ($TEMP_ENV)" || echo "RAM Cache:      ❌ LOCKED"
         [[ -f "$CACHE_GPG" ]] && echo "Disk Cache: ✅ ENCRYPTED ($CACHE_GPG)" || echo "Disk Cache: ❌ MISSING"
         bw status | grep -q '"status":"unlocked"' && echo "Bitwarden:      ✅ UNLOCKED" || echo "Bitwarden:      ❌ LOCKED"
         [[ -f "$SESSION_FILE" ]] && echo "Shared Bridge:  ✅ ACTIVE (RAM)" || echo "Shared Bridge:  ❌ CLOSED"
         [[ -f "$GPG_BRIDGE_FILE" ]] && echo "GPG Bridge:     ✅ ACTIVE (RAM)" || echo "GPG Bridge:     ❌ CLOSED"
-        
         if [[ -z "$LOCK_FILE" ]]; then
             echo "Concurrency:    ⚠️ UNPROTECTED (LOCK_FILE not configured)"
         elif flock -n "$LOCK_FILE" -c true 2>/dev/null; then
             echo "Concurrency:    ✅ LOCK FREE"
         else
-            # Correctly identify the lock holder by reading the LOCK_FILE.
             holder_pid=$(cat "$LOCK_FILE" 2>/dev/null)
-            echo "Concurrency:    🔒 LOCKED (by process [${holder_pid:-UNKNOWN}])"
+            if [[ -n "$holder_pid" ]] && ! kill -0 "$holder_pid" 2>/dev/null; then
+                echo "Concurrency:    ⚠️ STALE LOCK (Process [$holder_pid] is dead)"
+            else
+                echo "Concurrency:    🔒 LOCKED (by process [${holder_pid:-UNKNOWN}])"
+            fi
         fi
-
         echo -e "\n=== GLOBAL REVOCATION (PUB-SUB) ==="
         if [[ -f "$SUBS_REGISTRY" ]]; then
             sub_count=$(wc -l < "$SUBS_REGISTRY")
@@ -526,7 +509,6 @@ case "$1" in
         else
             echo "Active Shells:  ❌ No subscribers registered."
         fi
-
         if [[ -f "$KEYS_REGISTRY" ]]; then
             key_count=$(wc -l < "$KEYS_REGISTRY")
             key_list=$(tr '\n' ',' < "$KEYS_REGISTRY" | sed 's/,$//' | sed 's/,/, /g')
