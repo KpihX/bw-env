@@ -1,0 +1,7 @@
+GEMINI.md
+MEMORY.md
+.env
+*.tmp
+*.lock
+*.state
+*.lastsync
