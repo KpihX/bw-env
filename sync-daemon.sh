@@ -57,25 +57,31 @@ resume_daemon() {
         return
     fi
     PROCESSING_SIGNAL=true
-    log_sys "Signal SIGUSR1 received. Resuming background synchronization."
+    
+    local was_paused="$PAUSED"
     PAUSED=false
     update_daemon_state "ACTIVE"
     
     # AUTHORITATIVE RECOVERY: Use --force ONLY if this is a system wake event (detected via D-Bus).
-    # For manual signals, we use a standard unlock to avoid killing the parent process.
     get_graphical_env
     local force_flag=""
     [[ "$current_signal" == "sleep" ]] && force_flag="--force"
     
+    log_sys "Signal SIGUSR1 received. Resuming background synchronization."
     if "$UTILS_DIR/main.sh" unlock $force_flag --daemon; then
-        send_notification "Background sync RESUMED. Environment refreshed."
+        # Only notify if we were previously PAUSED to avoid spamming on manual refreshes.
+        if [[ "$was_paused" == "true" ]]; then
+            send_notification "Background sync RESUMED. Environment refreshed."
+        fi
     else
         local exit_code=$?
         log_sys "Unlock failed or cancelled (Code $exit_code). Reverting to PAUSED state."
         PAUSED=true
         update_daemon_state "PAUSED"
-        send_notification "Background sync PAUSED. Unlock cancelled."
+        # Always notify on failure as it's a state change to PAUSED.
+        send_notification "Background sync PAUSED. Unlock failed or cancelled."
     fi
+    
     PROCESSING_SIGNAL=false
     # Kill the current sleep process to force an immediate loop iteration.
     pkill -P $$ sleep 2>/dev/null
@@ -88,12 +94,20 @@ pause_daemon() {
         return
     fi
     PROCESSING_SIGNAL=true
-    log_sys "Signal SIGUSR2 received. Daemon entering PAUSED state."
+    
+    local was_paused="$PAUSED"
     PAUSED=true
     update_daemon_state "PAUSED"
-    # AUTHORITATIVE LOCK: Purge RAM.
+    
+    # AUTHORITATIVE LOCK: Purge RAM (Always run for security).
+    log_sys "Signal SIGUSR2 received. Locking environment."
     "$UTILS_DIR/main.sh" lock --daemon
-    send_notification "Background sync PAUSED. Manual lock or Sleep detected."
+    
+    # Only notify if we were previously ACTIVE.
+    if [[ "$was_paused" == "false" ]]; then
+        send_notification "Background sync PAUSED. Environment locked."
+    fi
+    
     PROCESSING_SIGNAL=false
 }
 
