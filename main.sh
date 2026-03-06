@@ -81,7 +81,9 @@ CORE PRINCIPLES & GUARANTEES:
   3. Strong Crypto: Local backup is AES-encrypted via PBKDF2 (100,000 iterations).
   4. Auto-Lockdown: Instant RAM purge on System Sleep or Screen Lock (via D-Bus).
   5. Global Revocation: SIGUSR2 broadcast to all shells for immediate memory wipe.
-  6. Concurrency: Atomic locking with PID transparency prevents race conditions.
+  6. Concurrency: Atomic locking with PID transparency and post-release notification.
+  7. Anti-Spam: Intelligent notifications triggered only on actual state changes.
+  8. Resilience: Authoritative lock breaking on system wake-up events.
 
 EXIT CODES:
   0  SUCCESS: Operation completed successfully.
@@ -100,8 +102,21 @@ function notify_daemon() {
     local sig="$1"
     local action="$2"
     if [[ -f "$DAEMON_PID_FILE" ]]; then
-        local daemon_pid=$(cat "$DAEMON_PID_FILE")
+        local daemon_pid=$(cat "$DAEMON_PID_FILE" 2>/dev/null)
         if [[ -n "$daemon_pid" ]] && kill -0 "$daemon_pid" 2>/dev/null; then
+            # Check current daemon state to avoid redundant signaling.
+            local current_state="UNKNOWN"
+            [[ -f "$DAEMON_STATE_FILE" ]] && current_state=$(cat "$DAEMON_STATE_FILE")
+
+            if [[ "$sig" == "SIGUSR1" && "$current_state" == "ACTIVE" ]]; then
+                log_sys "Daemon is already ACTIVE. Skipping redundant wake-up signal."
+                return 0
+            fi
+            if [[ "$sig" == "SIGUSR2" && "$current_state" == "PAUSED" ]]; then
+                log_sys "Daemon is already PAUSED. Skipping redundant pause signal."
+                return 0
+            fi
+
             kill -"$sig" "$daemon_pid" 2>/dev/null
             log_info "Background daemon [PID $daemon_pid] notified: $action."
         else
@@ -122,7 +137,7 @@ function unlock_unified() {
     # If 'unlock' is requested but environment is already active, skip to avoid redundant prompts.
     if [[ "$COMMAND" == "unlock" ]] && [[ -f "$TEMP_ENV" ]] && bw status | grep -q '"status":"unlocked"'; then
         log_info "Environment is already active. Use 'sync' to force an update."
-        # SECURITY: Even if already active, ensure the daemon is awake if called manually.
+        # SECURITY: Ensure the daemon is awake if called manually and it was paused.
         [[ "$run_mode" != "--daemon" ]] && notify_daemon "SIGUSR1" "Resume Sync"
         return 0
     fi
@@ -250,7 +265,10 @@ function unlock_unified() {
 
     # --- 4.12. Daemon Notification ---
     # SECURITY: Notify AFTER releasing the lock so the daemon can acquire it without conflict.
-    [[ "$run_mode" != "--daemon" ]] && notify_daemon "SIGUSR1" "Resume Sync"
+    # CRITICAL: Never notify if we are already running in daemon mode!
+    if [[ "$run_mode" != "--daemon" ]]; then
+        notify_daemon "SIGUSR1" "Resume Sync"
+    fi
 
     return "$EXIT_SUCCESS"
 }

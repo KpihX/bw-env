@@ -1,10 +1,20 @@
-# 🔐 BW-ENV: Bitwarden-Powered Environment Manager
+# 🔐 BW-ENV: Production-Grade Zero-Trust Environment Manager
 
-**BW-ENV** is a production-grade, high-security utility designed to centralize and automate the management of environment variables using **Vaultwarden/Bitwarden** as the single source of truth. It implements advanced Unix system programming concepts to achieve a "Zero-Friction, Zero-Leak" environment.
+**BW-ENV** is a high-security utility designed to manage sensitive environment variables using **Bitwarden (Vaultwarden)** as the source of truth. It implements a **Zero-Trust** architecture where secrets reside exclusively in RAM and are protected by atomic locking and reactive global revocation.
 
 ---
 
-## 🏛️ 1. Zero-Trust Architecture & Security Mandates
+## 🏗️ 1. Directive-Sequential Architecture
+
+The system is built on a strict separation of powers to ensure 100% reliability and predictability:
+
+1.  **`main.sh` (The Pure Executor):** Handles the heavy lifting (Bitwarden API, GPG encryption, RAM deployment). It is **idempotent** and only notifies the daemon during manual operations to prevent signal loops.
+2.  **`sync-daemon.sh` (The Authoritative Orchestrator):** Manages the system lifecycle. It listens for D-Bus signals (Sleep/Wake, Lock/Unlock) and coordinates state transitions (`ACTIVE` <-> `PAUSED`).
+3.  **`utils.sh` (The Security Plumbing):** Provides atomic locking (`flock`), high-entropy key derivation (PBKDF2 100k), and surgical memory wiping.
+
+---
+
+## 🏛️ 2. Zero-Trust Architecture & Security Mandates
 
 The system is built on the principle that **nothing is trusted by default**, and secrets must never touch the physical disk in plain text.
 
@@ -104,18 +114,42 @@ BW-ENV is not just a script; it's a reactive ecosystem where every component com
 
 ---
 
-## ⚙️ 3. Operational Excellence & Flexibility
+## 📡 3. Reactive Intelligence & Global Revocation
 
-### 🧩 Zero-Hardcoding Philosophy
-Every constant, path, timeout, and security limit is centralized in the `.env` file. This allows for 100% flexibility and easy adaptation to different environments or security requirements.
+BW-ENV is not just a script; it's a reactive ecosystem where every component communicates in real-time.
 
-### 🚦 Concurrency & Transparency
-- **Atomic Locking**: Uses `flock` with **PID transparency**. You can always see exactly which process holds the lock via `bw-env status`.
-- **Authoritative Security**: Security commands (`lock`, `purge`) are prioritized. They will break any existing lock to ensure immediate protection.
+### 📡 Global Revocation (Pub-Sub Model)
+- **Subscriber Registry**: Every active terminal registers its PID in a shared list.
+- **Signal Broadcast**: Upon a `lock` or `purge`, the system broadcasts a **`SIGUSR2`** signal to all registered shells.
+- **Instant Purge**: Each shell reacts to the signal by immediately unsetting all secrets from its memory, ensuring a system-wide security wipe in milliseconds.
+
+### 🛡️ Proactive Auto-Lockdown
+- **D-Bus Integration**: A supervised monitor listens for system-wide signals (`PrepareForSleep`, `LockedHint`).
+- **Reactive Purge**: Secrets are instantly wiped from RAM when you close your laptop or lock your screen.
+
+### 🚀 Resilience & Anti-Spam
+- **Anti-Spam Notifications**: Desktop notifications are intelligent; they only trigger when the daemon's state actually changes.
+-   **Wake-up Resilience**: Upon system wake-up, the daemon implements a two-stage stabilization delay (configurable via `.env`) to ensure the graphical session is fully ready before triggering Zenity.
+-   **Graphical Context Awareness**: The daemon automatically injects `DISPLAY` and `DBUS` context, ensuring reliable UI interaction even when running as a background systemd service.
+-   **Zero-Hardcoding**: Every timeout, delay, and path is centralized in the `.env` file for maximum portability.
 
 ---
 
-## 🛠️ 4. Usage & Command Center
+## ⚙️ 4. Operational Excellence & Flexibility
+
+### 🧩 Configuration (`.env`)
+The system is 100% flexible. Key parameters include:
+- `WAKE_DEBOUNCE_DELAY`: Time to wait after a wake signal before acting.
+- `GRAPHICAL_WAIT_DELAY`: Safety buffer for Zenity display.
+- `CHECK_INTERVAL`: Background sync frequency.
+
+### 🚦 Concurrency & Transparency
+- **Atomic Locking**: Uses `flock` with **PID transparency**. You can always see exactly which process holds the lock via `bw-env status`.
+- **Post-Release Notification**: To prevent race conditions, the daemon is notified **after** the lock is released, ensuring a smooth transition.
+
+---
+
+## 🛠️ 5. Usage & Command Center
 
 | Command | Category | Description |
 | :--- | :--- | :--- |
@@ -124,6 +158,7 @@ Every constant, path, timeout, and security limit is centralized in the `.env` f
 | `bw-env status` | **Audit** | Full visibility: Daemon state, RAM/Disk caches, Bridges, and Active Shells. |
 | `bw-env lock` | **Security** | Purges RAM, closes bridges, and triggers **Global Revocation**. |
 | `bw-env purge` | **Nuclear** | **Total Destruction**: Stops daemon, wipes RAM/Disk, and revokes all shells. |
+| `bw-env decrypt`| **Offline** | Restores environment from encrypted disk cache (No network required). |
 | `bw-env logs` | **Journal** | Quick access to the last X system journal entries (`-n X`). |
 | `bw-env restart`| **Control** | Restarts the background synchronization service. |
 | `bw-env pause`  | **Control** | Puts the daemon into silent sleep mode (D-Bus remains active). |
@@ -131,7 +166,7 @@ Every constant, path, timeout, and security limit is centralized in the `.env` f
 
 ---
 
-## 🚦 5. Standardized Exit Codes
+## 🚦 6. Standardized Exit Codes
 
 | Code | Label | Meaning |
 | :--- | :--- | :--- |

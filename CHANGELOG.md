@@ -1,31 +1,39 @@
-# 📜 BW-ENV Changelog
+# 📜 BW-ENV: Engineering Changelog & Evolution
 
-All notable changes to this project will be documented in this file.
+This document chronicles the development of `bw-env`, a journey from a simple script to a production-grade, zero-trust infrastructure. It highlights the failures, regressions, and breakthroughs that shaped the final architecture.
 
-## [1.0.0] - 2026-03-05
-### Added
-- **Initial Implementation**: Centralized Bitwarden environment management.
-- **Shared Session Bridge**: RAM-based `/dev/shm` bridge for cross-process authentication.
-- **Memory Hardening**: Best-effort variable wiping (`wipe_var`) and `trap` cleanup.
-- **Auto-Lock**: D-Bus listener for system Sleep and screen Lock events.
-- **Modular Architecture**: Shared logic moved to `utils.sh`.
-- **Identity Protection**: Mandatory check for `AUTHORIZED_USER`.
-- **Context-Aware UI**: Support for `read -s` (TTY) and `Zenity` (GUI).
-- **Categorized Exit Codes**: Precise error reporting for daemon consumption.
-- **English Standard**: Full code and comment translation.
+## [v1.0.0] - 2026-03-06 (The "Swiss Watch" Release)
+### 🚀 Final Breakthroughs
+- **Directive-Sequential Flow**: Finalized the separation of powers. `main.sh` is now a pure executor, and `sync-daemon.sh` is the sole orchestrator.
+- **Stabilization Delays**: Implemented `WAKE_DEBOUNCE_DELAY` and `GRAPHICAL_WAIT_DELAY` to solve the "Zenity at Wake-up" race condition.
+- **Zero-Hardcoding**: Centralized all delays and paths in `.env`.
+- **Indestructible Loop**: Hardened the daemon's main loop with `wait $! || true` and removed fragile subshell pipes.
 
-### Changed
-- Refactored `main.sh` to follow an "Authentication-First" logical flow.
-- Optimized `load.sh` for non-blocking shell initialization.
-- Switched from symmetric GPG to Salted-Hash symmetric GPG for better compartmentalization.
+## [v0.9.0] - 2026-03-05 (The "Signal War" Phase)
+### ⚠️ Regressions & Lessons
+- **The Signal Loop Bug**: Discovered that `main.sh` was signaling the daemon even when called by the daemon, causing infinite recursion.
+- **The Zenity Spam**: Identified that rapid D-Bus signals at wake-up caused multiple Zenity prompts.
+- **The Invisible Daemon**: Fixed a bug where the daemon wrote an empty PID file, making it invisible to the `status` command.
+### ✨ Progress
+- **Smart Notification**: Implemented state-aware signaling (`notify_daemon`) to prevent redundant notifications.
+- **Post-Release Notification**: Moved daemon signaling after the lock release to prevent process conflicts.
 
-### Fixed
-- Fixed `bad substitution` error in `load.sh` for Ksh compatibility.
-- Fixed redundant Zenity popups when multiple terminals are opened simultaneously.
-- Fixed vault synchronization lag by adding mandatory `bw sync` before retrieval.
+## [v0.8.0] - 2026-03-04 (The "Reactive" Foundation)
+### 🚀 Breakthroughs
+- **Global Revocation**: Implemented the Pub-Sub model using `SIGUSR2` to wipe secrets from all active shells instantly.
+- **D-Bus Integration**: Added the system monitor to detect Sleep/Wake and Screen Lock events.
+- **Shared RAM Bridges**: Established the `/dev/shm` bridges for Bitwarden sessions and GPG keys.
 
-## [0.1.0] - 2026-03-04
-### Added
-- Project inception: Concept of using Bitwarden as a central .env store.
-- Basic GPG symmetric encryption for local backup.
-- Initial systemd user service for background sync.
+## [v0.5.0] - 2026-03-03 (The "Security" Hardening)
+### ✨ Progress
+- **PBKDF2 100k**: Implemented high-entropy key derivation for local backups.
+- **Atomic Swap**: Introduced the `mv` pattern for RAM cache updates to prevent partial reads.
+- **Surgical Wiping**: Added zero-overwriting for sensitive variables in RAM.
+
+## [v0.1.0] - 2026-03-02 (The "Genesis")
+### 🐣 Initial Concept
+- Basic script to fetch Bitwarden custom fields and export them as environment variables.
+- Initial realization that a background daemon was necessary for a seamless developer experience.
+
+---
+*Every failure was a lesson, every regression a step toward a more robust system.*

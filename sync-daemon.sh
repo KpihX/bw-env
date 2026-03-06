@@ -59,8 +59,6 @@ resume_daemon() {
     PROCESSING_SIGNAL=true
     
     local was_paused="$PAUSED"
-    PAUSED=false
-    update_daemon_state "ACTIVE"
     
     # AUTHORITATIVE RECOVERY: Use --force ONLY if this is a system wake event (detected via D-Bus).
     get_graphical_env
@@ -68,7 +66,11 @@ resume_daemon() {
     [[ "$current_signal" == "sleep" ]] && force_flag="--force"
     
     log_sys "Signal SIGUSR1 received. Resuming background synchronization."
+    # Small delay to ensure graphical context is fully active.
+    sleep "${GRAPHICAL_WAIT_DELAY:-1}"
     if "$UTILS_DIR/main.sh" unlock $force_flag --daemon; then
+        PAUSED=false
+        update_daemon_state "ACTIVE"
         # Only notify if we were previously PAUSED to avoid spamming on manual refreshes.
         if [[ "$was_paused" == "true" ]]; then
             send_notification "Background sync RESUMED. Environment refreshed."
@@ -87,10 +89,9 @@ resume_daemon() {
     pkill -P $$ sleep 2>/dev/null
 }
 
-# pause_daemon: Signal handler for SIGUSR2. Triggered by manual 'bw-env lock' in a terminal or System Sleep.
+# pause_daemon: Signal handler for SIGUSR2. Triggered by manual 'bw-env lock' or 'bw-env pause'.
 pause_daemon() {
     if [[ "$PROCESSING_SIGNAL" == "true" ]]; then
-        log_sys "Signal SIGUSR2 received but already processing. Skipping."
         return
     fi
     PROCESSING_SIGNAL=true
@@ -99,15 +100,15 @@ pause_daemon() {
     PAUSED=true
     update_daemon_state "PAUSED"
     
-    # AUTHORITATIVE LOCK: Purge RAM (Always run for security).
-    log_sys "Signal SIGUSR2 received. Locking environment."
-    "$UTILS_DIR/main.sh" lock --daemon
+    log_sys "Signal SIGUSR2 received. Daemon entering PAUSED state."
     
     # Only notify if we were previously ACTIVE.
     if [[ "$was_paused" == "false" ]]; then
-        send_notification "Background sync PAUSED. Environment locked."
+        send_notification "Background sync PAUSED."
     fi
     
+    # Kill the current sleep process to force an immediate loop iteration.
+    pkill -P $$ sleep 2>/dev/null
     PROCESSING_SIGNAL=false
 }
 
@@ -115,13 +116,14 @@ pause_daemon() {
 cleanup_daemon() {
     log_sys "Daemon shutting down. Cleaning up resources..."
     [[ -n "$MONITOR_PID" ]] && kill "$MONITOR_PID" 2>/dev/null
+    [[ -n "$DBUS_FD" ]] && exec {DBUS_FD}<&-
     rm -f "$DAEMON_PID_FILE" "$DAEMON_STATE_FILE"
+    exit 0
 }
 
 trap 'resume_daemon' SIGUSR1
 trap 'pause_daemon' SIGUSR2
-trap 'cleanup_daemon' EXIT
-trap 'exit 0' SIGTERM SIGINT
+trap 'cleanup_daemon' SIGTERM SIGINT
 
 # --- 2.3. Desktop Notification Helper ---
 # Ensures notifications work even when running as a systemd user service.
@@ -151,20 +153,24 @@ send_notification() {
 }
 
 # --- 3. System Signal Listener (The Ear) ---
-# The monitor ONLY sends signals to the parent daemon. It NEVER calls main.sh directly
-# to avoid race conditions and ensure the daemon remains the sole master of its state.
+# The monitor ONLY sends signals to the parent daemon. It NEVER calls main.sh directly.
+# We use process substitution to avoid subshell pipes that can cause accidental exits.
 function start_dbus_monitor() {
     if ! command -v dbus-monitor >/dev/null 2>&1; then
         log_err "dbus-monitor not found. Automatic security features will be unavailable."
         return 1
     fi
 
+    log_sys "Starting D-Bus monitor..."
+    
+    # Launch dbus-monitor in the background and read its output line by line.
+    exec {DBUS_FD}< <(dbus-monitor --system \
+        "type='signal',interface='org.freedesktop.login1.Manager',member='PrepareForSleep'" \
+        "type='signal',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged',arg0='org.freedesktop.login1.Session'")
+    
     (
-        log_sys "D-Bus monitor process started (PID: $$)."
-        dbus-monitor --system \
-            "type='signal',interface='org.freedesktop.login1.Manager',member='PrepareForSleep'" \
-            "type='signal',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged',arg0='org.freedesktop.login1.Session'" | \
-        while IFS= read -r line; do
+        local current_signal=""
+        while IFS= read -r line <&$DBUS_FD; do
             case "$line" in
                 *member=PrepareForSleep*)   current_signal="sleep" ;;
                 *member=PropertiesChanged*) current_signal="session" ;;
@@ -175,12 +181,16 @@ function start_dbus_monitor() {
                 sleep|locked_hint)
                     case "$line" in
                         *"boolean true"*)
-                            log_sys "D-Bus: Security event (Sleep/Lock) detected. Signaling parent (SIGUSR2)."
+                            log_sys "D-Bus: Security event (Sleep/Lock) detected. Forcing RAM purge and Pause."
+                            get_graphical_env
+                            "$UTILS_DIR/main.sh" lock --daemon
                             kill -SIGUSR2 $DAEMON_PID
                             current_signal=""
                             ;;
                         *"boolean false"*)
-                            log_sys "D-Bus: System event (Wake/Unlock) detected. Signaling parent (SIGUSR1)."
+                            log_sys "D-Bus: System event (Wake/Unlock) detected. Debouncing..."
+                            # Wait for the graphical session to be fully ready.
+                            sleep "${WAKE_DEBOUNCE_DELAY:-2}"
                             kill -SIGUSR1 $DAEMON_PID
                             current_signal=""
                             ;;
@@ -190,7 +200,7 @@ function start_dbus_monitor() {
         done
     ) &
     MONITOR_PID=$!
-    log_sys "System monitoring active (PID: $MONITOR_PID): Sleep/Wake and Lock/Unlock detection enabled."
+    log_sys "System monitoring active (PID: $MONITOR_PID)."
 }
 
 start_dbus_monitor
@@ -199,62 +209,61 @@ start_dbus_monitor
 # Ensure secrets are requested immediately upon daemon startup.
 log_sys "Daemon startup: Performing initial environment synchronization."
 if "$UTILS_DIR/main.sh" sync --daemon; then
-    log_sys "Initial synchronization successful."
+    log_sys "Initial synchronization successful. Daemon is ACTIVE."
+    PAUSED=false
     update_daemon_state "ACTIVE"
 else
     EXIT_CODE=$?
-    log_sys "Initial synchronization failed with Exit Code: $EXIT_CODE. Daemon entering PAUSED state."
+    log_sys "Initial synchronization failed (Code $EXIT_CODE). Daemon starting in PAUSED state."
     PAUSED=true
     update_daemon_state "PAUSED"
-    send_notification "Background sync PAUSED. Initial synchronization failed (Code $EXIT_CODE)."
+    send_notification "Background sync PAUSED. Initial synchronization failed."
 fi
 
 # --- 5. Main Synchronization Loop (The Clock) ---
-log_sys "Background synchronization loop active (Interval: ${CHECK_INTERVAL:-300}s)."
+log_sys "Background synchronization loop starting (Interval: ${CHECK_INTERVAL:-300}s)."
 
 while true; do
+    log_sys "Loop iteration started. State: PAUSED=$PAUSED"
+    
     # 5.1. Monitor Supervision: Ensure the security guard is always alive.
-    if ! kill -0 "$MONITOR_PID" 2>/dev/null; then
-        log_warn "D-Bus monitor process (PID: $MONITOR_PID) died unexpectedly. Restarting security guard..."
+    if [[ -z "$MONITOR_PID" ]] || ! kill -0 "$MONITOR_PID" 2>/dev/null; then
+        log_warn "D-Bus monitor not running. Starting security guard..."
         start_dbus_monitor
     fi
 
-    # 5.2. Pause Management
+    # 5.2. Periodic Synchronization
     if [[ "$PAUSED" == "false" ]]; then
-        # 5.3. Shared Authentication Management
         load_session
-        
-        # 5.4. Status Check
         if bw status | grep -q '"status":"unlocked"'; then
-            # Session is valid: Sync fresh data from the server.
-            log_sys "Session active. Starting background sync cycle..."
+            log_sys "Periodic sync: Vault is unlocked. Refreshing..."
             if "$UTILS_DIR/main.sh" sync --daemon; then
-                # Ensure state is published as ACTIVE after success.
-                update_daemon_state "ACTIVE"
-            else
-                log_sys "Background sync failed (likely network issue). Will retry in next cycle."
+                # SECURITY: Only set to ACTIVE if we haven't been paused in the meantime.
+                [[ "$PAUSED" == "false" ]] && update_daemon_state "ACTIVE"
             fi
         else
-            # Session is locked: The daemon attempts to re-establish the bridge.
-            log_sys "Bitwarden session is locked. Requesting Master Unlock to resume background sync."
+            log_sys "Periodic sync: Vault is locked. Requesting unlock..."
             get_graphical_env
             if "$UTILS_DIR/main.sh" unlock --daemon; then
-                # Ensure state is published as ACTIVE after success.
-                PAUSED=false
-                update_daemon_state "ACTIVE"
+                # SECURITY: Only set to ACTIVE if we haven't been paused in the meantime.
+                if [[ "$PAUSED" == "false" ]]; then
+                    PAUSED=false
+                    update_daemon_state "ACTIVE"
+                fi
             else
                 EXIT_CODE=$?
-                log_sys "Authentication attempt finished with Exit Code: $EXIT_CODE"
-                log_sys "Authentication failed. Daemon entering PAUSED state to avoid spamming."
-                PAUSED=true
-                update_daemon_state "PAUSED"
-                send_notification "Background sync PAUSED. Manual unlock required."
+                if [[ $EXIT_CODE -eq "$EXIT_USER_CANCEL" ]] || [[ $EXIT_CODE -eq "$EXIT_MAX_ATTEMPTS" ]]; then
+                    PAUSED=true
+                    update_daemon_state "PAUSED"
+                    send_notification "Background sync PAUSED. Manual unlock required."
+                fi
             fi
         fi
     fi
     
-    # Wait for the next check interval using an interruptible wait.
-    # This allows the daemon to process SIGUSR1/SIGUSR2 signals immediately.
+    # 5.3. Wait for next cycle.
+    # We use 'sleep & wait' to ensure signals (SIGUSR1/SIGUSR2) are handled INSTANTLY.
+    # The '|| true' ensures the loop continues if wait is interrupted by a signal.
     sleep "${CHECK_INTERVAL:-300}" &
-    wait $!
+    wait $! || true
 done
