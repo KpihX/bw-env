@@ -2,6 +2,12 @@
 
 This document chronicles the development of `bw-env`, a journey from a simple script to a production-grade, zero-trust infrastructure. It highlights the failures, regressions, and breakthroughs that shaped the final architecture.
 
+## [v1.1.1] - 2026-03-06 (The "Data Freshness" Release)
+### 🚀 Refinements
+- **Restored Server Sync**: Re-integrated `bw sync` into the authentication loop. This ensures that the `sync` command always fetches the latest data from the cloud while serving as a non-interactive session validator.
+- **Optimized Funnel**: Refined the "Quality Funnel" to perform a single server sync followed by a local item retrieval, maximizing both speed and data integrity.
+- **Cleanup & Standardisation**: Removed all temporary analysis files and standardized internal variable scopes for absolute memory safety.
+
 ## [v1.1.0] - 2026-03-06 (The "Performance & Resilience" Release)
 ### 🚀 Breakthroughs & Fixes
 - **Inter-Process Resilience**: Implemented a "Quality Funnel" in `unlock_unified` to detect and self-heal from session invalidations caused by other Bitwarden-related processes.

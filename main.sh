@@ -160,19 +160,29 @@ function unlock_unified() {
 
     while true; do
         # --- 4.3. Validation & Retrieval (The Quality Funnel) ---
-        # If we have a session, try to get the data immediately.
+        # If we have a session, try to refresh and get the data immediately.
         if [[ -n "$BW_SESSION" ]] && [[ -n "$GPG_KEY" ]]; then
-            log_info "Active session detected. Retrieving environment data..."
-            # This single call validates Auth, Decryption, and Data presence.
-            ITEM_JSON=$(bw get item "$ITEM_ID" 2>/dev/null)
-            if [[ $? -eq 0 ]] && [[ -n "$ITEM_JSON" ]]; then
-                log_info "Vault item data successfully retrieved."
-                break # SUCCESS: We have the data and a valid session.
+            log_info "Active session detected. Synchronizing with server..."
+            
+            # 1. Force server synchronization to ensure data freshness.
+            # This also serves as a non-interactive session validation.
+            if bw sync >/dev/null 2>&1; then
+                log_info "Vault successfully synchronized. Retrieving data..."
+                
+                # 2. Retrieve the item from the freshly updated local database.
+                ITEM_JSON=$(bw get item "$ITEM_ID" 2>/dev/null)
+                if [[ $? -eq 0 ]] && [[ -n "$ITEM_JSON" ]]; then
+                    log_info "Vault item data successfully retrieved."
+                    break # SUCCESS: We have fresh data and a valid session.
+                else
+                    log_warn "Retrieval failed. Vault might be locked. Clearing bridge..."
+                fi
             else
-                log_warn "Session invalidated or vault locked. Clearing bridge..."
-                clear_session
-                error="Session expired or vault locked by another process."
+                log_warn "Session token rejected by server. Clearing bridge..."
             fi
+            
+            clear_session
+            error="Session expired or invalidated by another process."
         fi
 
         # --- 4.4. Authentication (Fallback) ---
