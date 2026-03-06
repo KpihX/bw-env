@@ -119,15 +119,9 @@ function notify_daemon() {
 
             kill -"$sig" "$daemon_pid" 2>/dev/null
             log_info "Background daemon [PID $daemon_pid] notified: $action."
-        elif [[ "$sig" == "SIGUSR1" ]]; then
-            log_info "Background daemon is not running. Starting synchronization service..."
-            systemctl --user start bw-env-sync.service 2>/dev/null
         else
             log_warn "Background daemon is not running. Signal $sig ($action) skipped."
         fi
-    elif [[ "$sig" == "SIGUSR1" ]]; then
-        log_info "Background daemon is not running. Starting synchronization service..."
-        systemctl --user start bw-env-sync.service 2>/dev/null
     else
         log_warn "Background daemon is not running. Signal $sig ($action) skipped."
     fi
@@ -138,12 +132,12 @@ function unlock_unified() {
     local run_mode="$1"
     local attempts=0
     local max_attempts="${MAX_AUTH_ATTEMPTS:-3}"
-
+    
     # --- 4.1. Idempotency Check ---
     # If 'unlock' is requested but environment is already active, skip to avoid redundant prompts.
-    # CRITICAL: 'sync' must ALWAYS proceed to refresh the environment and register the shell.
     if [[ "$COMMAND" == "unlock" ]] && [[ -f "$TEMP_ENV" ]] && bw status | grep -q '"status":"unlocked"'; then
         log_info "Environment is already active. Use 'sync' to force an update."
+        # SECURITY: Ensure the daemon is awake if called manually and it was paused.
         [[ "$run_mode" != "--daemon" ]] && notify_daemon "SIGUSR1" "Resume Sync"
         return 0
     fi
@@ -152,30 +146,16 @@ function unlock_unified() {
     acquire_lock
 
     log_info "Initiating Unified Salted Unlock sequence..."
-
+    
     local error=""
-    # Note: ITEM_JSON and SESSION_KEY are global for security wiping via trap.
-    ITEM_JSON=""
-    SESSION_KEY=""
-
     while true; do
-        # --- 4.3. Validation & Retrieval (The Quality Funnel) ---
-        # If we have a session, try to get the data immediately.
+        # --- 4.3. Password Capture (Retry Loop) ---
         if [[ -n "$BW_SESSION" ]] && [[ -n "$GPG_KEY" ]]; then
-            log_info "Active session detected. Retrieving environment data..."
-            # This single call validates Auth, Decryption, and Data presence.
-            ITEM_JSON=$(bw get item "$ITEM_ID" 2>/dev/null)
-            if [[ $? -eq 0 ]] && [[ -n "$ITEM_JSON" ]]; then
-                log_info "Vault item data successfully retrieved."
-                break # SUCCESS: We have the data and a valid session.
-            else
-                log_warn "Session invalidated or vault locked. Clearing bridge..."
-                clear_session
-                error="Session expired or vault locked by another process."
-            fi
+            log_info "Active session and GPG key detected in RAM bridge. Skipping password prompt."
+            break
         fi
 
-        # --- 4.4. Authentication (Fallback) ---
+        # Check attempt limit
         ((attempts++))
         if [[ $attempts -gt $max_attempts ]]; then
             log_err "Maximum authentication attempts ($max_attempts) reached. Aborting."
@@ -184,18 +164,22 @@ function unlock_unified() {
         fi
 
         prompt_master_password "🔑 BW-ENV Master Unlock" "Enter your Vaultwarden Master Password (empty to skip):" "$error"
-        if [[ $? -eq "$EXIT_USER_CANCEL" ]]; then
+        EXIT_CODE=$?
+        if [[ $EXIT_CODE -eq "$EXIT_USER_CANCEL" ]]; then
             log_info "Authentication cancelled by user."
             release_lock
             exit "$EXIT_USER_CANCEL"
         fi
 
+        # --- 4.4. Bitwarden Authentication (The Source of Trust) ---
         log_info "Verifying credentials with Bitwarden server (Attempt $attempts/$max_attempts)..."
         SESSION_KEY=$(bw unlock --raw <<< "$MASTER_PASS")
-        if [[ $? -eq 0 ]]; then
+        if [[ $? -eq "$EXIT_SUCCESS" ]]; then
+            # Save the session key to the RAM bridge for sharing across terminals.
             save_session "$SESSION_KEY"
             log_info "Bitwarden session established and shared via RAM bridge."
             
+            # --- 4.4.1. Key Derivation (Salted Hash) ---
             log_info "Generating salted cryptographic key for local storage..."
             GPG_KEY=$(derive_key "$MASTER_PASS")
             if [[ -n "$GPG_KEY" ]]; then
@@ -205,15 +189,38 @@ function unlock_unified() {
                 log_err "Key derivation critical failure."
                 exit "$EXIT_CRYPTO_ERR"
             fi
-            # We don't break here; the next iteration will perform the 'bw get item'.
+            break
         else
             error="Authentication failed: Incorrect Master Password provided."
             wipe_var MASTER_PASS
         fi
     done
 
+    # --- 4.5. Cloud Synchronization ---
+    log_info "Synchronizing local database with Vaultwarden server..."
+    if bw sync; then
+        log_info "Vault successfully synchronized."
+    else
+        log_warn "Vault sync failed (Offline mode?). Continuing with last known local data."
+    fi
+
+    if [[ -z "$GPG_KEY" ]]; then
+        log_err "GPG encryption key is missing. Cannot proceed with sync."
+        exit "$EXIT_CRYPTO_ERR"
+    fi
+    
+    # --- 4.7. Secret Retrieval ---
+    log_info "Downloading environment data from vault (Item ID: $ITEM_ID)..."
+    ITEM_JSON=$(bw get item "$ITEM_ID")
+    if [[ $? -ne "$EXIT_SUCCESS" ]]; then 
+        log_err "Retrieval failed: Item $ITEM_ID not found."
+        exit "$EXIT_RETRIEVAL_ERR"
+    fi
+    log_info "Vault item data successfully retrieved."
+    
     # --- 4.8. Data Transformation (JSON to Shell) ---
     log_info "Processing custom fields into shell environment variables..."
+    # SECURITY: Sanitize field names to prevent injection. 
     ENV_DATA=$(echo "$ITEM_JSON" | jq -r '.fields[] | select(.value != null) | 
         .name as $raw_name | 
         ($raw_name | gsub("[^a-zA-Z0-9_]"; "_") | sub("^[0-9]"; "_\(.)")) as $safe_name | 
@@ -225,29 +232,26 @@ function unlock_unified() {
     fi
 
     # --- 4.9. RAM Deployment (Volatile Cache) ---
+    # SECURITY: Use Atomic Swap to prevent readers (load.sh) from sourcing a partial file.
     local temp_file="${TEMP_ENV}.tmp"
     if echo "$ENV_DATA" > "$temp_file" && chmod 600 "$temp_file"; then
         mv -f "$temp_file" "$TEMP_ENV"
         log_info "Volatile environment cache updated successfully at $TEMP_ENV"
+        # Update the global keys registry for revocation support.
         register_keys
     else
         log_err "Failed to deploy RAM cache."
         rm -f "$temp_file"
         exit "$EXIT_CONFIG_ERR"
     fi
-
-    # --- 4.10. Persistent Backup (Encrypted Disk Cache) ---
+    
+    # --- 4.10. Disk Persistence (Symmetric Encryption) ---
     log_info "Updating persistent encrypted disk cache backup..."
-    if [[ -z "$GPG_KEY" ]]; then
-        log_warn "GPG key missing from memory. Skipping disk backup."
+    if echo "$ENV_DATA" | gpg --quiet --batch --yes --passphrase "$GPG_KEY" --pinentry-mode loopback --symmetric --output "$CACHE_GPG"; then
+        log_info "Local encrypted cache updated at $CACHE_GPG"
     else
-        if echo "$ENV_DATA" | gpg --batch --yes --symmetric --passphrase "$GPG_KEY" \
-            --cipher-algo AES256 -o "$CACHE_GPG" 2>/dev/null; then
-            chmod 600 "$CACHE_GPG"
-            log_info "Local encrypted cache updated at $CACHE_GPG"
-        else
-            log_warn "Disk backup failed: GPG encryption error."
-        fi
+        log_err "Disk backup failed: GPG encryption error."
+        exit "$EXIT_CRYPTO_ERR"
     fi
     
     # --- 4.11. Timestamp Update ---
@@ -257,13 +261,15 @@ function unlock_unified() {
     fi
 
     log_info "Unified Sync & Unlock complete. Secrets are now active."
-    
-    # --- 4.12. Finalization ---
     release_lock
-    
-    # Notify daemon only if called manually.
-    [[ "$run_mode" != "--daemon" ]] && notify_daemon "SIGUSR1" "Resume Sync"
-    
+
+    # --- 4.12. Daemon Notification ---
+    # SECURITY: Notify AFTER releasing the lock so the daemon can acquire it without conflict.
+    # CRITICAL: Never notify if we are already running in daemon mode!
+    if [[ "$run_mode" != "--daemon" ]]; then
+        notify_daemon "SIGUSR1" "Resume Sync"
+    fi
+
     return "$EXIT_SUCCESS"
 }
 
@@ -471,7 +477,7 @@ case "$1" in
         ;;
     logs)        
         shift
-        lines=20
+        local lines=20
         [[ "$1" == "-n" ]] && { lines="$2"; shift 2; }
         show_logs "$lines"
         ;;

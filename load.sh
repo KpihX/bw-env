@@ -36,7 +36,17 @@ wipe_shell_env() {
 
 # Set up reactive traps immediately to ensure protection.
 trap 'wipe_shell_env' SIGUSR2
-trap 'remove_subscriber' EXIT
+
+# Register subscriber cleanup.
+# In Zsh, 'trap ... EXIT' inside a function is local. We use zshexit_functions for persistence.
+if [ -n "$ZSH_VERSION" ]; then
+    # Ensure the function is added to the global exit hooks of Zsh.
+    if [[ ! " ${zshexit_functions[*]} " == *" remove_subscriber "* ]]; then
+        zshexit_functions+=(remove_subscriber)
+    fi
+else
+    trap 'remove_subscriber' EXIT
+fi
 
 # --- 3. Identity & Context Protection ---
 # Security check: Only load secrets if the current user matches the authorized owner.
@@ -62,10 +72,11 @@ fi
 
 # --- 5. Environment Sanitization ---
 # 🧹 DYNAMIC CLEANUP: Remove internal configuration variables from the shell scope.
-# We preserve KEYS_REGISTRY as it is needed for the reactive revocation trap.
+# We preserve registries as they are needed for the reactive revocation trap.
 if [[ -f "$UTILS_DIR/.env" ]]; then
     for var in $(grep -E '^[A-Z_]+=' "$UTILS_DIR/.env" | cut -d= -f1); do
         [[ "$var" == "KEYS_REGISTRY" ]] && continue
+        [[ "$var" == "SUBS_REGISTRY" ]] && continue
         unset "$var"
     done
 fi

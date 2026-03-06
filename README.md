@@ -57,18 +57,18 @@ source $HOME/Work/sh/bw-env/load.sh
 ```
 
 ### 2. Configuration (`.env`)
-The system is 100% flexible. All parameters are centralized in `~/Work/sh/bw-env/.env`:
+The system is 100% flexible. All parameters are centralized in `~/Work/sh/bw-env/.env`. A template is provided in `.env.example`:
 
 ```bash
 # Bitwarden Item ID: The unique UUID of the secure note.
-ITEM_ID="fc88b261-f2c7-4bfe-b861-8b0dc90a22ec"
+ITEM_ID="your-uuid-here"
 
 # Cryptography
-INTERNAL_SALT="BW_ENV_2026_PROD"
+INTERNAL_SALT="your-salt-here"
 MAX_AUTH_ATTEMPTS=3
 
 # Paths & Bridges
-CACHE_GPG="$HOME/.bw/cache.env.gpg"
+CACHE_GPG="$HOME/.bw/env/cache.env.gpg"
 TEMP_ENV="/dev/shm/bw-$USER.env"
 SESSION_FILE="/dev/shm/bw-session-$USER"
 GPG_BRIDGE_FILE="/dev/shm/bw-gpg-$USER"

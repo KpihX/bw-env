@@ -2,6 +2,15 @@
 
 This document chronicles the development of `bw-env`, a journey from a simple script to a production-grade, zero-trust infrastructure. It highlights the failures, regressions, and breakthroughs that shaped the final architecture.
 
+## [v1.1.0] - 2026-03-06 (The "Performance & Resilience" Release)
+### 🚀 Breakthroughs & Fixes
+- **Inter-Process Resilience**: Implemented a "Quality Funnel" in `unlock_unified` to detect and self-heal from session invalidations caused by other Bitwarden-related processes.
+- **Performance Optimization**: Eliminated redundant `bw sync` calls and merged validation with data retrieval, saving 5-8 seconds per cycle.
+- **Zsh Compatibility**: Fixed a critical regression where the `EXIT` trap in `load.sh` was local to the `bw-env` function, causing immediate unregistration of the shell. Switched to `zshexit_functions` for Zsh.
+- **GPG Robustness**: Fixed an invalid `--pbkdf2-iter` flag in GPG and added explicit error capturing for disk backups.
+- **Memory Safety**: Standardized variable casing and ensured sensitive variables (`ITEM_JSON`, `SESSION_KEY`) are global to be accessible by the `cleanup_secrets` trap.
+- **Path Independence**: Hardened `load_config` to use absolute project paths, preventing failures when called from different working directories.
+
 ## [v1.0.0] - 2026-03-06 (The "Swiss Watch" Release)
 ### 🚀 Final Breakthroughs
 - **Directive-Sequential Flow**: Finalized the separation of powers. `main.sh` is now a pure executor, and `sync-daemon.sh` is the sole orchestrator.
