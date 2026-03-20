@@ -60,18 +60,18 @@ class ControlCenter:
         self.root.geometry("1120x760")
         self.root.minsize(960, 640)
         self.palette = {
-            "bg": "#14181f",
-            "panel": "#1b2230",
-            "panel_alt": "#222c3d",
-            "border": "#2f3b52",
-            "text": "#edf2f7",
-            "muted": "#9aa7bd",
-            "green": "#1faa6d",
-            "amber": "#d9981e",
-            "red": "#d14b61",
-            "blue": "#3b82f6",
-            "violet": "#8b5cf6",
-            "gray": "#64748b",
+            "bg": "#11161d",
+            "panel": "#171d27",
+            "panel_alt": "#1f2836",
+            "border": "#344256",
+            "text": "#e6edf7",
+            "muted": "#97a6ba",
+            "green": "#1f9d69",
+            "amber": "#c8921b",
+            "red": "#c65368",
+            "blue": "#4f8cff",
+            "violet": "#8667f2",
+            "gray": "#5f7087",
         }
         self.root.configure(bg=self.palette["bg"])
         self._configure_styles()
@@ -113,8 +113,34 @@ class ControlCenter:
             background=[("selected", self.palette["panel"])],
             foreground=[("selected", self.palette["text"])],
         )
-        style.configure("TEntry", fieldbackground=self.palette["panel_alt"], foreground=self.palette["text"], insertcolor=self.palette["text"])
-        style.configure("TCombobox", fieldbackground=self.palette["panel_alt"], foreground=self.palette["text"])
+        style.configure(
+            "TEntry",
+            fieldbackground=self.palette["panel_alt"],
+            foreground=self.palette["text"],
+            insertcolor=self.palette["text"],
+            bordercolor=self.palette["border"],
+        )
+        style.configure(
+            "TCombobox",
+            fieldbackground=self.palette["panel_alt"],
+            background=self.palette["panel_alt"],
+            foreground=self.palette["text"],
+            arrowcolor=self.palette["text"],
+            bordercolor=self.palette["border"],
+        )
+        style.map(
+            "TCombobox",
+            fieldbackground=[("readonly", self.palette["panel_alt"])],
+            background=[("readonly", self.palette["panel_alt"])],
+            foreground=[("readonly", self.palette["text"])],
+            selectbackground=[("readonly", self.palette["panel_alt"])],
+            selectforeground=[("readonly", self.palette["text"])],
+            arrowcolor=[("readonly", self.palette["text"])],
+        )
+        self.root.option_add("*TCombobox*Listbox.background", self.palette["panel_alt"])
+        self.root.option_add("*TCombobox*Listbox.foreground", self.palette["text"])
+        self.root.option_add("*TCombobox*Listbox.selectBackground", self.palette["blue"])
+        self.root.option_add("*TCombobox*Listbox.selectForeground", self.palette["text"])
 
     def _build_ui(self) -> None:
         self.root.columnconfigure(0, weight=1)
@@ -127,7 +153,7 @@ class ControlCenter:
         title = tk.Label(
             header,
             text="BW-ENV",
-            font=("TkDefaultFont", 24, "bold"),
+            font=("TkDefaultFont", 22, "bold"),
             bg=self.palette["bg"],
             fg=self.palette["text"],
         )
@@ -288,9 +314,41 @@ class ControlCenter:
 
     def _build_settings_tab(self) -> None:
         self.settings_tab.columnconfigure(0, weight=1)
-        frame = ttk.Frame(self.settings_tab)
-        frame.grid(row=0, column=0, sticky="nsew")
+        self.settings_tab.rowconfigure(0, weight=1)
+
+        container = ttk.Frame(self.settings_tab)
+        container.grid(row=0, column=0, sticky="nsew")
+        container.columnconfigure(0, weight=1)
+        container.rowconfigure(0, weight=1)
+
+        canvas = tk.Canvas(
+            container,
+            bg=self.palette["bg"],
+            highlightthickness=0,
+            bd=0,
+        )
+        scrollbar = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
+        frame = ttk.Frame(canvas)
         frame.columnconfigure(1, weight=1)
+
+        frame.bind(
+            "<Configure>",
+            lambda event: canvas.configure(scrollregion=canvas.bbox("all")),
+        )
+        canvas_window = canvas.create_window((0, 0), window=frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        canvas.bind(
+            "<Configure>",
+            lambda event: canvas.itemconfigure(canvas_window, width=event.width),
+        )
+
+        def _on_mousewheel(event: tk.Event) -> None:
+            delta = -1 * int(event.delta / 120) if event.delta else 0
+            canvas.yview_scroll(delta or -1, "units")
+
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
 
         grouped_settings = [
             ("Daemon", ["CHECK_INTERVAL", "MAX_AUTH_ATTEMPTS", "AUTO_START_ON_BOOT", "AUTO_START_ON_WAKE"]),
@@ -311,6 +369,7 @@ class ControlCenter:
                 self.settings_vars[key] = var
                 if key in {"AUTO_START_ON_BOOT", "AUTO_START_ON_WAKE"}:
                     widget = ttk.Combobox(section, textvariable=var, values=["true", "false"], state="readonly")
+                    widget.configure(takefocus=False)
                 else:
                     widget = ttk.Entry(section, textvariable=var)
                 widget.grid(row=idx, column=1, sticky="ew", pady=4)
