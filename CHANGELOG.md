@@ -2,6 +2,18 @@
 
 This document chronicles the development of `bw-env`, a journey from a simple script to a production-grade, zero-trust infrastructure. It highlights the failures, regressions, and breakthroughs that shaped the final architecture.
 
+## [v1.2.0] - 2026-03-20 (The "Control Surface" Release)
+### 🚀 Additions
+- **GUI-Ready Status API**: Added `bw-env status --json` as the structured state surface for the future tray/control-center.
+- **Config Control Surface**: Added `bw-env config list`, `bw-env config list --json`, `bw-env config get KEY`, and `bw-env config set KEY VALUE`.
+- **Shell Bootstrap Bundle**: Added `profile.sh` so `~/.kshrc` can source a single reusable bootstrap entrypoint.
+- **First Control Center**: Added a dark-themed Tkinter control center and an AppIndicator tray integration with direct actions.
+- **Tray Lifecycle Command**: Added `bw-env tray install` to deploy and activate the user service automatically when possible.
+### 🛠️ Operational Refinements
+- **Boot / Wake Policy Flags**: Added `AUTO_START_ON_BOOT` and `AUTO_START_ON_WAKE` to decouple daemon activation policy from the service lifecycle.
+- **Subscriber Audit Split**: `status` now distinguishes interactive shells from non-interactive processes with clearer indentation and process detail.
+- **Tray Service Template**: Added `gui/bw-env-tray.service` for user-session startup.
+
 ## [v1.1.1] - 2026-03-06 (The "Data Freshness" Release)
 ### 🚀 Refinements
 - **Restored Server Sync**: Re-integrated `bw sync` into the authentication loop. This ensures that the `sync` command always fetches the latest data from the cloud while serving as a non-interactive session validator.

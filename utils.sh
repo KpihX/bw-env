@@ -103,42 +103,99 @@ register_keys() {
     fi
 }
 
-# register_subscriber: Adds the current shell's PID to the list of active subscribers.
+# subscriber_registry_files: Returns all configured subscriber registry files.
+subscriber_registry_files() {
+    [[ -n "$SUBS_REGISTRY_INTERACTIVE" ]] && printf '%s\n' "$SUBS_REGISTRY_INTERACTIVE"
+    [[ -n "$SUBS_REGISTRY_NON_INTERACTIVE" ]] && printf '%s\n' "$SUBS_REGISTRY_NON_INTERACTIVE"
+}
+
+# current_subscriber_registry: Chooses the registry for the current shell type.
+current_subscriber_registry() {
+    if [[ -t 0 && "$-" == *i* ]]; then
+        printf '%s\n' "$SUBS_REGISTRY_INTERACTIVE"
+    else
+        printf '%s\n' "$SUBS_REGISTRY_NON_INTERACTIVE"
+    fi
+}
+
+# prune_subscriber_registry: Keeps only live numeric PIDs in the target registry.
+prune_subscriber_registry() {
+    local registry="$1"
+    [[ -n "$registry" ]] || return 0
+    [[ -f "$registry" ]] || return 0
+
+    local tmp_file
+    tmp_file=$(mktemp "${registry}.tmp.XXXXXX") || return 1
+
+    while read -r pid; do
+        [[ "$pid" =~ ^[0-9]+$ ]] || continue
+        kill -0 "$pid" 2>/dev/null || continue
+        grep -qx "$pid" "$tmp_file" 2>/dev/null || echo "$pid" >> "$tmp_file"
+    done < "$registry"
+
+    if [[ -s "$tmp_file" ]]; then
+        chmod 600 "$tmp_file"
+        mv -f "$tmp_file" "$registry"
+    else
+        rm -f "$tmp_file" "$registry"
+    fi
+}
+
+# prune_subscribers: Prunes all subscriber registries.
+prune_subscribers() {
+    local registry
+    while read -r registry; do
+        [[ -n "$registry" ]] || continue
+        prune_subscriber_registry "$registry"
+    done < <(subscriber_registry_files)
+}
+
+# register_subscriber: Adds the current shell's PID to the appropriate registry.
 register_subscriber() {
-    if [[ -n "$SUBS_REGISTRY" ]]; then
-        # Append PID if not already present.
-        if ! grep -q "^$$\$" "$SUBS_REGISTRY" 2>/dev/null; then
-            echo "$$" >> "$SUBS_REGISTRY"
-            chmod 600 "$SUBS_REGISTRY"
-            log_sys "Shell [PID $$] registered for global revocation."
-        fi
+    local registry
+    registry=$(current_subscriber_registry)
+    [[ -n "$registry" ]] || return 0
+
+    prune_subscribers
+    if ! grep -q "^$$\$" "$registry" 2>/dev/null; then
+        touch "$registry"
+        chmod 600 "$registry"
+        echo "$$" >> "$registry"
+        log_sys "Process [PID $$] registered for global revocation in $(basename "$registry")."
     fi
 }
 
-# remove_subscriber: Removes the current shell's PID from the registry (on exit).
+# remove_subscriber: Removes the current shell's PID from both registries.
 remove_subscriber() {
-    if [[ -f "$SUBS_REGISTRY" ]]; then
-        # Use a silent sed to remove the PID.
-        sed -i "/^$$\$/d" "$SUBS_REGISTRY" 2>/dev/null
-        log_sys "Shell [PID $$] unregistered (Exit)."
-    fi
+    local registry tmp_file
+    while read -r registry; do
+        [[ -f "$registry" ]] || continue
+        tmp_file=$(mktemp "${registry}.tmp.XXXXXX") || continue
+        grep -vx "^$$\$" "$registry" > "$tmp_file" 2>/dev/null || true
+        if [[ -s "$tmp_file" ]]; then
+            chmod 600 "$tmp_file"
+            mv -f "$tmp_file" "$registry"
+        else
+            rm -f "$tmp_file" "$registry"
+        fi
+    done < <(subscriber_registry_files)
+    log_sys "Process [PID $$] unregistered (Exit)."
 }
 
-# broadcast_purge: Sends SIGUSR2 to all registered shell PIDs to trigger environment wiping.
+# broadcast_purge: Sends SIGUSR2 to all registered process PIDs to trigger environment wiping.
 broadcast_purge() {
-    if [[ -f "$SUBS_REGISTRY" ]]; then
-        log_sys "Broadcasting environment revocation signal (SIGUSR2) to active shells..."
+    local registry pid
+    prune_subscribers
+    while read -r registry; do
+        [[ -f "$registry" ]] || continue
+        log_sys "Broadcasting environment revocation signal (SIGUSR2) to $(basename "$registry")..."
         while read -r pid; do
             if kill -0 "$pid" 2>/dev/null; then
                 kill -SIGUSR2 "$pid" 2>/dev/null
             fi
-        done < "$SUBS_REGISTRY"
-        
-        # SECURITY: We delete the subscribers list, but we KEEP the keys registry.
-        # This allows shells to perform unsets even if they process the signal with a delay.
-        # The keys registry contains only variable names, not values.
-        rm -f "$SUBS_REGISTRY"
-    fi
+        done < "$registry"
+        rm -f "$registry"
+    done < <(subscriber_registry_files)
 }
 
 # clear_session: Securely wipes the session key and GPG key from the RAM bridge.

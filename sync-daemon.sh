@@ -43,6 +43,14 @@ PAUSED=false
 DAEMON_PID=$$
 PROCESSING_SIGNAL=false
 
+config_flag_enabled() {
+    local value="${1:-false}"
+    case "${value,,}" in
+        1|true|yes|on) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 # get_graphical_env: Exports DISPLAY and DBUS variables for Zenity support.
 get_graphical_env() {
     export DISPLAY="${DISPLAY:-:0}"
@@ -191,7 +199,11 @@ function start_dbus_monitor() {
                             log_sys "D-Bus: System event (Wake/Unlock) detected. Debouncing..."
                             # Wait for the graphical session to be fully ready.
                             sleep "${WAKE_DEBOUNCE_DELAY:-2}"
-                            kill -SIGUSR1 $DAEMON_PID
+                            if config_flag_enabled "${AUTO_START_ON_WAKE:-false}"; then
+                                kill -SIGUSR1 $DAEMON_PID
+                            else
+                                log_sys "AUTO_START_ON_WAKE=false. Daemon remains PAUSED after wake."
+                            fi
                             current_signal=""
                             ;;
                     esac
@@ -205,19 +217,52 @@ function start_dbus_monitor() {
 
 start_dbus_monitor
 
+# --- 3.5. Graphical Session Readiness Check ---
+# At boot, the daemon starts before the graphical session (DISPLAY/D-Bus) is ready.
+# This function blocks until the D-Bus user socket exists, ensuring Zenity can appear.
+wait_for_graphical_session() {
+    local user_id; user_id=$(id -u)
+    local dbus_socket="/run/user/$user_id/bus"
+    local max_wait="${GRAPHICAL_WAIT_MAX:-60}"
+    local step=2
+    local waited=0
+
+    log_sys "Waiting for graphical session (D-Bus socket: $dbus_socket)..."
+    while [[ $waited -lt $max_wait ]]; do
+        if [[ -S "$dbus_socket" ]]; then
+            export DBUS_SESSION_BUS_ADDRESS="unix:path=$dbus_socket"
+            export DISPLAY="${DISPLAY:-:0}"
+            log_sys "Graphical session ready after ${waited}s."
+            return 0
+        fi
+        sleep $step
+        waited=$(( waited + step ))
+    done
+    log_sys "Timeout (${max_wait}s): graphical session not detected. Proceeding anyway."
+    return 1
+}
+
 # --- 4. Initial Boot/Login Sync ---
-# Ensure secrets are requested immediately upon daemon startup.
-log_sys "Daemon startup: Performing initial environment synchronization."
-if "$UTILS_DIR/main.sh" sync --daemon; then
-    log_sys "Initial synchronization successful. Daemon is ACTIVE."
-    PAUSED=false
-    update_daemon_state "ACTIVE"
+# Request secrets immediately on daemon startup only when auto-start on boot is enabled.
+if config_flag_enabled "${AUTO_START_ON_BOOT:-true}"; then
+    # Wait for the graphical session before attempting Zenity-based unlock.
+    wait_for_graphical_session
+    log_sys "Daemon startup: Performing initial environment synchronization."
+    if "$UTILS_DIR/main.sh" sync --daemon; then
+        log_sys "Initial synchronization successful. Daemon is ACTIVE."
+        PAUSED=false
+        update_daemon_state "ACTIVE"
+    else
+        EXIT_CODE=$?
+        log_sys "Initial synchronization failed (Code $EXIT_CODE). Daemon starting in PAUSED state."
+        PAUSED=true
+        update_daemon_state "PAUSED"
+        send_notification "Background sync PAUSED. Initial synchronization failed."
+    fi
 else
-    EXIT_CODE=$?
-    log_sys "Initial synchronization failed (Code $EXIT_CODE). Daemon starting in PAUSED state."
+    log_sys "AUTO_START_ON_BOOT=false. Daemon starting in PAUSED state without initial sync."
     PAUSED=true
     update_daemon_state "PAUSED"
-    send_notification "Background sync PAUSED. Initial synchronization failed."
 fi
 
 # --- 5. Main Synchronization Loop (The Clock) ---
@@ -225,6 +270,7 @@ log_sys "Background synchronization loop starting (Interval: ${CHECK_INTERVAL:-3
 
 while true; do
     log_sys "Loop iteration started. State: PAUSED=$PAUSED"
+    prune_subscribers
     
     # 5.1. Monitor Supervision: Ensure the security guard is always alive.
     if [[ -z "$MONITOR_PID" ]] || ! kill -0 "$MONITOR_PID" 2>/dev/null; then

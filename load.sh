@@ -15,7 +15,13 @@ fi
 # Verify the presence of the utility library.
 if [[ -f "$UTILS_DIR/utils.sh" ]]; then
     source "$UTILS_DIR/utils.sh"
-    load_config # Dynamically loads ITEM_ID, AUTHORIZED_USER, etc.
+    # Source config directly using the known absolute path to avoid Zsh path-guess failures.
+    if [[ -f "$UTILS_DIR/.env" ]]; then
+        source "$UTILS_DIR/.env"
+    else
+        log_err "Critical configuration file missing at $UTILS_DIR/.env"
+        return 1 2>/dev/null || exit 1
+    fi
 else
     logger -t "bw-env-load" "[ERR] Critical failure: utils.sh missing at $UTILS_DIR"
     return 1 2>/dev/null || exit 1
@@ -76,7 +82,8 @@ fi
 if [[ -f "$UTILS_DIR/.env" ]]; then
     for var in $(grep -E '^[A-Z_]+=' "$UTILS_DIR/.env" | cut -d= -f1); do
         [[ "$var" == "KEYS_REGISTRY" ]] && continue
-        [[ "$var" == "SUBS_REGISTRY" ]] && continue
+        [[ "$var" == "SUBS_REGISTRY_INTERACTIVE" ]] && continue
+        [[ "$var" == "SUBS_REGISTRY_NON_INTERACTIVE" ]] && continue
         unset "$var"
     done
 fi

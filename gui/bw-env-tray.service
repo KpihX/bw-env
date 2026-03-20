@@ -1,0 +1,12 @@
+[Unit]
+Description=BW-ENV Tray Integration
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/bin/bash %h/Work/sh/bw-env/gui/tray.sh start
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

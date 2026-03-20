@@ -49,15 +49,23 @@ bw-env() {
             # which is unreliable when sourced from inside a Zsh function (gives caller
             # path instead of load.sh path → UTILS_DIR wrong → TEMP_ENV never resolved).
             # Fix: use the same direct-path pattern already proven in the 'get' case.
-            if [[ $ret -eq 0 && "$1" != "help" && "$1" != "lock" && "$1" != "purge" ]]; then
+            if [[ $ret -eq 0 && ( "$1" == "unlock" || "$1" == "sync" ) ]]; then
                 local _dir="$HOME/Work/sh/bw-env"
+                local _already_registered=0
                 if [[ -f "$_dir/utils.sh" && -f "$_dir/.env" ]]; then
                     source "$_dir/utils.sh"
                     source "$_dir/.env"
+                    local _registry
+                    _registry=$(current_subscriber_registry)
+                    if [[ -n "$_registry" ]] && grep -q "^$$\$" "$_registry" 2>/dev/null; then
+                        _already_registered=1
+                    fi
                     if [[ -f "$TEMP_ENV" ]]; then
                         source "$TEMP_ENV"
                         register_subscriber
-                        echo "✅ [bw-env] Shell [$$] secrets auto-injected after '$1'."
+                        if [[ $_already_registered -eq 0 ]]; then
+                            echo "✅ [bw-env] Shell [$$] secrets auto-injected after '$1'."
+                        fi
                     fi
                 fi
             fi

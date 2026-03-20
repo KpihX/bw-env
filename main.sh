@@ -28,6 +28,7 @@ COMMAND="$1"
 # Load an existing shared session from RAM if available (Bridge).
 load_session
 load_gpg_key
+prune_subscribers
 
 # --- 2. Security: The Automated Cleanup ---
 # Initialize centralized signal handling to ensure memory wiping and lock release.
@@ -35,20 +36,27 @@ setup_signal_handlers
 
 # --- 3. Documentation: Help Interface ---
 function show_help() {
-    cat <<EOF
+  cat <<EOF
 🔐 BW-ENV: Bitwarden-Powered Environment Manager (High-Security)
 Usage: bw-env [command] [options]
 
-COMMANDS:
-  unlock   Primary: Prompts for password, syncs vault, and updates caches (RAM & GPG).
-           Use '--force' to break a stuck lock.
-  sync     Refresh: Force-synchronizes local data with the Vaultwarden server.
-           Uses RAM bridges (Session & GPG) for silent background updates.
-  lock     Security: Immediately purges secrets from RAM and closes all bridges.
-           Triggers Global Revocation (SIGUSR2) to all active shells.
+  COMMANDS:
+    unlock   Primary: Prompts for password, syncs vault, and updates caches (RAM & GPG).
+             Use '--force' to break a stuck lock.
+    sync     Refresh: Force-synchronizes local data with the Vaultwarden server.
+             Uses RAM bridges (Session & GPG) for silent background updates.
+    config   Settings: Read or update user-facing configuration values.
+             Use 'bw-env config list', 'bw-env config list --json', 'bw-env config get KEY',
+             or 'bw-env config set KEY VALUE'.
+    gui      Control Center: Opens the graphical control center window.
+    tray     Tray: Starts, stops, restarts, or opens the tray/control-center integration.
+             Use 'bw-env tray start|stop|restart|open|install'.
+    lock     Security: Immediately purges secrets from RAM and closes all bridges.
+             Triggers Global Revocation (SIGUSR2) to all active shells.
   purge    Nuclear: Destroys ALL traces (RAM, Disk, Bridges, Daemon) of secrets.
   decrypt  Cold Start: Restores the environment to RAM from the encrypted disk backup.
-  status   Audit: Displays current visibility of secrets, bridges, and lock state.
+    status   Audit: Displays current visibility of secrets, bridges, and lock state.
+             Use '--json' for machine-readable output (GUI / integrations).
   logs     Journal: Displays the last N log entries (default: 20). Use '-n X'.
   restart  Daemon: Restarts the background synchronization service.
   start    Daemon: Starts the background synchronization service.
@@ -56,6 +64,12 @@ COMMANDS:
   pause    Daemon: Puts the daemon into PAUSED state (silent mode).
   resume   Daemon: Wakes up the daemon from PAUSED state.
   help     Manual: Displays this detailed help message.
+
+SHELL-SIDE COMMANDS (must run via the bw-env shell function, not as a subprocess):
+  get      Subscribe: Injects secrets into the current terminal and registers it as a
+           subscriber. Use when the vault was locked at shell startup.
+  drop     Unsubscribe: Wipes secrets from the current terminal and removes it from
+           the subscriber list (does not affect other shells or the global vault).
 
 SYSTEMD DAEMON (Background Sync & Auto-Lock):
   Status:  systemctl --user status bw-env-sync.service
@@ -94,6 +108,250 @@ EXIT CODES:
   5  CRYPTO ERROR: GPG Encryption/Decryption or PBKDF2 key derivation failed.
   6  MAX ATTEMPTS: Maximum authentication attempts reached (prevents infinite loops).
 EOF
+}
+
+config_flag_enabled() {
+    local value="${1:-false}"
+    case "${value,,}" in
+        1|true|yes|on) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+relevant_config_keys() {
+    printf '%s\n' \
+        AUTHORIZED_USER \
+        ITEM_ID \
+        CACHE_GPG \
+        CHECK_INTERVAL \
+        MAX_AUTH_ATTEMPTS \
+        WAKE_DEBOUNCE_DELAY \
+        GRAPHICAL_WAIT_DELAY \
+        GRAPHICAL_WAIT_MAX \
+        AUTO_START_ON_BOOT \
+        AUTO_START_ON_WAKE \
+        LOCK_TIMEOUT \
+        LOAD_WAIT_MAX \
+        LOAD_WAIT_STEP \
+        DAEMON_TAG \
+        LOG_TAG
+}
+
+config_value() {
+    local key="$1"
+    eval "printf '%s' \"\${$key}\""
+}
+
+emit_config_json() {
+    local args=()
+    local key value
+    while read -r key; do
+        [[ -n "$key" ]] || continue
+        value=$(config_value "$key")
+        args+=(--arg "$key" "$value")
+    done < <(relevant_config_keys)
+
+    jq -n "${args[@]}" '{
+        authorized_user: $AUTHORIZED_USER,
+        item_id: $ITEM_ID,
+        cache_gpg: $CACHE_GPG,
+        daemon: {
+            check_interval: ($CHECK_INTERVAL | tonumber? // $CHECK_INTERVAL),
+            max_auth_attempts: ($MAX_AUTH_ATTEMPTS | tonumber? // $MAX_AUTH_ATTEMPTS),
+            auto_start_on_boot: ($AUTO_START_ON_BOOT | test("^(?i:true|1|yes|on)$")),
+            auto_start_on_wake: ($AUTO_START_ON_WAKE | test("^(?i:true|1|yes|on)$")),
+            wake_debounce_delay: ($WAKE_DEBOUNCE_DELAY | tonumber? // $WAKE_DEBOUNCE_DELAY),
+            graphical_wait_delay: ($GRAPHICAL_WAIT_DELAY | tonumber? // $GRAPHICAL_WAIT_DELAY),
+            graphical_wait_max: ($GRAPHICAL_WAIT_MAX | tonumber? // $GRAPHICAL_WAIT_MAX),
+            lock_timeout: ($LOCK_TIMEOUT | tonumber? // $LOCK_TIMEOUT),
+            load_wait_max: ($LOAD_WAIT_MAX | tonumber? // $LOAD_WAIT_MAX),
+            load_wait_step: ($LOAD_WAIT_STEP | tonumber? // $LOAD_WAIT_STEP)
+        },
+        logging: {
+            daemon_tag: $DAEMON_TAG,
+            log_tag: $LOG_TAG
+        }
+    }'
+}
+
+set_config_value() {
+    local key="$1"
+    local value="$2"
+    local env_file="$UTILS_DIR/.env"
+    local tmp_file
+
+    if ! grep -qx "$key" < <(relevant_config_keys); then
+        log_err "Unsupported config key: $key"
+        exit 1
+    fi
+
+    tmp_file=$(mktemp "${env_file}.tmp.XXXXXX") || {
+        log_err "Failed to allocate temporary config file."
+        exit 1
+    }
+
+    awk -v key="$key" -v value="$value" '
+        BEGIN { updated = 0 }
+        $0 ~ "^" key "=" {
+            print key "=\"" value "\""
+            updated = 1
+            next
+        }
+        { print }
+        END {
+            if (!updated) {
+                print key "=\"" value "\""
+            }
+        }
+    ' "$env_file" > "$tmp_file"
+
+    chmod 600 "$tmp_file"
+    mv -f "$tmp_file" "$env_file"
+    load_config
+    log_info "Configuration updated: $key=$value"
+}
+
+emit_status_json() {
+    prune_subscribers
+
+    local daemon_running=false
+    local daemon_pid=""
+    local daemon_state="STOPPED"
+    local daemon_label="STOPPED"
+    if [[ -f "$DAEMON_PID_FILE" ]]; then
+        daemon_pid=$(cat "$DAEMON_PID_FILE" 2>/dev/null)
+        if [[ -n "$daemon_pid" ]] && kill -0 "$daemon_pid" 2>/dev/null; then
+            daemon_running=true
+            daemon_state="ACTIVE"
+            [[ -f "$DAEMON_STATE_FILE" ]] && daemon_state=$(cat "$DAEMON_STATE_FILE")
+            daemon_label="$daemon_state"
+        fi
+    fi
+
+    local last_sync="NEVER"
+    [[ -f "$LAST_SYNC_FILE" ]] && last_sync=$(cat "$LAST_SYNC_FILE")
+
+    local ram_cache_active=false
+    local disk_cache_active=false
+    local vault_unlocked=false
+    local shared_bridge_active=false
+    local gpg_bridge_active=false
+    [[ -f "$TEMP_ENV" ]] && ram_cache_active=true
+    [[ -f "$CACHE_GPG" ]] && disk_cache_active=true
+    bw status | grep -q '"status":"unlocked"' && vault_unlocked=true
+    [[ -f "$SESSION_FILE" ]] && shared_bridge_active=true
+    [[ -f "$GPG_BRIDGE_FILE" ]] && gpg_bridge_active=true
+
+    local concurrency_state="LOCK_FREE"
+    local concurrency_message="LOCK FREE"
+    local lock_holder_pid=""
+    if [[ -z "$LOCK_FILE" ]]; then
+        concurrency_state="UNPROTECTED"
+        concurrency_message="LOCK_FILE not configured"
+    elif flock -n "$LOCK_FILE" -c true 2>/dev/null; then
+        concurrency_state="LOCK_FREE"
+        concurrency_message="LOCK FREE"
+    else
+        lock_holder_pid=$(cat "$LOCK_FILE" 2>/dev/null)
+        if [[ -n "$lock_holder_pid" ]] && ! kill -0 "$lock_holder_pid" 2>/dev/null; then
+            concurrency_state="STALE_LOCK"
+            concurrency_message="Process [$lock_holder_pid] is dead"
+        else
+            concurrency_state="LOCKED"
+            concurrency_message="Held by process [${lock_holder_pid:-UNKNOWN}]"
+        fi
+    fi
+
+    local interactive_json='[]'
+    if [[ -f "$SUBS_REGISTRY_INTERACTIVE" ]]; then
+        interactive_json=$(jq -Rn '[inputs | select(length > 0) | tonumber]' < "$SUBS_REGISTRY_INTERACTIVE")
+    fi
+
+    local non_interactive_json='[]'
+    if [[ -f "$SUBS_REGISTRY_NON_INTERACTIVE" ]]; then
+        non_interactive_json=$(
+            while read -r pid; do
+                [[ -n "$pid" ]] || continue
+                ps -p "$pid" -o pid=,tty=,comm=,args= 2>/dev/null
+            done < "$SUBS_REGISTRY_NON_INTERACTIVE" | \
+            jq -R -s '
+                split("\n")
+                | map(select(length > 0))
+                | map(capture("^(?<pid>\\S+)\\s+(?<tty>\\S+)\\s+(?<comm>\\S+)\\s+(?<args>.*)$"))
+                | map({
+                    pid: (.pid | tonumber),
+                    tty: .tty,
+                    comm: .comm,
+                    args: .args
+                })
+            '
+        )
+    fi
+
+    local keys_json='[]'
+    if [[ -f "$KEYS_REGISTRY" ]]; then
+        keys_json=$(jq -Rn '[inputs | select(length > 0)]' < "$KEYS_REGISTRY")
+    fi
+
+    jq -n \
+        --arg daemon_pid "$daemon_pid" \
+        --arg daemon_state "$daemon_state" \
+        --arg daemon_label "$daemon_label" \
+        --arg last_sync "$last_sync" \
+        --arg check_interval "$CHECK_INTERVAL" \
+        --arg auto_start_on_boot "$AUTO_START_ON_BOOT" \
+        --arg auto_start_on_wake "$AUTO_START_ON_WAKE" \
+        --arg temp_env "$TEMP_ENV" \
+        --arg cache_gpg "$CACHE_GPG" \
+        --arg session_file "$SESSION_FILE" \
+        --arg gpg_bridge_file "$GPG_BRIDGE_FILE" \
+        --arg concurrency_state "$concurrency_state" \
+        --arg concurrency_message "$concurrency_message" \
+        --arg lock_holder_pid "$lock_holder_pid" \
+        --argjson daemon_running "$daemon_running" \
+        --argjson ram_cache_active "$ram_cache_active" \
+        --argjson disk_cache_active "$disk_cache_active" \
+        --argjson vault_unlocked "$vault_unlocked" \
+        --argjson shared_bridge_active "$shared_bridge_active" \
+        --argjson gpg_bridge_active "$gpg_bridge_active" \
+        --argjson interactive "$interactive_json" \
+        --argjson non_interactive "$non_interactive_json" \
+        --argjson keys "$keys_json" \
+        '{
+            daemon: {
+                running: $daemon_running,
+                pid: (if $daemon_pid == "" then null else ($daemon_pid | tonumber?) end),
+                state: $daemon_state,
+                label: $daemon_label,
+                last_sync: $last_sync,
+                check_interval: ($check_interval | tonumber?),
+                auto_start_on_boot: ($auto_start_on_boot | test("^(?i:true|1|yes|on)$")),
+                auto_start_on_wake: ($auto_start_on_wake | test("^(?i:true|1|yes|on)$"))
+            },
+            storage: {
+                ram_cache: { active: $ram_cache_active, path: $temp_env },
+                disk_cache: { active: $disk_cache_active, path: $cache_gpg },
+                shared_bridge: { active: $shared_bridge_active, path: $session_file },
+                gpg_bridge: { active: $gpg_bridge_active, path: $gpg_bridge_file }
+            },
+            vault: {
+                unlocked: $vault_unlocked
+            },
+            concurrency: {
+                state: $concurrency_state,
+                message: $concurrency_message,
+                holder_pid: (if $lock_holder_pid == "" then null else ($lock_holder_pid | tonumber?) end)
+            },
+            subscribers: {
+                interactive: $interactive,
+                non_interactive: $non_interactive
+            },
+            keys: {
+                count: ($keys | length),
+                names: $keys,
+                active_in_ram: $ram_cache_active
+            }
+        }'
 }
 
 # notify_daemon: Internal helper to signal the background service.
@@ -349,7 +607,8 @@ function purge_all() {
     wipe_file "$TEMP_ENV"
     wipe_file "$SESSION_FILE"
     wipe_file "$GPG_BRIDGE_FILE"
-    wipe_file "$SUBS_REGISTRY"
+    wipe_file "$SUBS_REGISTRY_INTERACTIVE"
+    wipe_file "$SUBS_REGISTRY_NON_INTERACTIVE"
     
     # 4. Securely wipe the persistent disk cache.
     log_info "Destroying persistent disk backup ($CACHE_GPG)..."
@@ -449,14 +708,61 @@ case "$1" in
     lock)        lock_vault "$DAEMON_FLAG" ;;
     purge)       purge_all ;;
     decrypt)     decrypt_cache ;;
+    get|drop)
+        log_err "'bw-env $1' is a shell-side command — it must run inside your shell process."
+        log_info "Make sure bw-env is loaded as a shell function (source ~/.kshrc) and not called as a subprocess."
+        exit 1
+        ;;
+    gui)
+        exec python3 "$UTILS_DIR/gui/control_center.py"
+        ;;
+    tray)
+        shift
+        exec bash "$UTILS_DIR/gui/tray.sh" "${1:-start}"
+        ;;
     restart)
         log_info "Restarting background synchronization service..."
         systemctl --user restart bw-env-sync.service
         ;;
     start)
-        log_info "Starting background synchronization service..."
-        systemctl --user start bw-env-sync.service
-        ;;
+          log_info "Starting background synchronization service..."
+          systemctl --user start bw-env-sync.service
+          ;;
+      config)
+          shift
+          case "$1" in
+              list|"")
+                  if [[ "$2" == "--json" ]]; then
+                      emit_config_json
+                  else
+                      while read -r key; do
+                          [[ -n "$key" ]] || continue
+                          echo "$key=$(config_value "$key")"
+                      done < <(relevant_config_keys)
+                  fi
+                  ;;
+              --json)
+                  emit_config_json
+                  ;;
+              get)
+                  [[ -n "$2" ]] || { log_err "Usage: bw-env config get KEY"; exit 1; }
+                  if ! grep -qx "$2" < <(relevant_config_keys); then
+                      log_err "Unsupported config key: $2"
+                      exit 1
+                  fi
+                  config_value "$2"
+                  echo
+                  ;;
+              set)
+                  [[ -n "$2" && -n "$3" ]] || { log_err "Usage: bw-env config set KEY VALUE"; exit 1; }
+                  set_config_value "$2" "$3"
+                  ;;
+              *)
+                  log_err "Unsupported config action: $1"
+                  exit 1
+                  ;;
+          esac
+          ;;
     stop)
         log_info "Stopping background synchronization service..."
         systemctl --user stop bw-env-sync.service
@@ -485,9 +791,14 @@ case "$1" in
         [[ "$1" == "-n" ]] && { lines="$2"; shift 2; }
         show_logs "$lines"
         ;;
-    help|--help) show_help ;;
-    status)
-        echo "=== BW-ENV STATUS (ATOMIC & SHARED) ==="
+      help|--help) show_help ;;
+      status)
+          if [[ "$2" == "--json" ]]; then
+              emit_status_json
+              exit 0
+          fi
+          prune_subscribers
+          echo "=== BW-ENV STATUS (ATOMIC & SHARED) ==="
         daemon_status="❌ STOPPED"
         if [[ -n "$DAEMON_PID_FILE" ]] && [[ -f "$DAEMON_PID_FILE" ]]; then
             d_pid=$(cat "$DAEMON_PID_FILE" 2>/dev/null)
@@ -523,13 +834,30 @@ case "$1" in
             fi
         fi
         echo -e "\n=== GLOBAL REVOCATION (PUB-SUB) ==="
-        if [[ -f "$SUBS_REGISTRY" ]]; then
-            sub_count=$(wc -l < "$SUBS_REGISTRY")
-            sub_list=$(tr '\n' ',' < "$SUBS_REGISTRY" | sed 's/,$//' | sed 's/,/, /g')
-            echo "Active Shells:  ✅ $sub_count subscriber(s) registered."
+        if [[ -f "$SUBS_REGISTRY_INTERACTIVE" ]]; then
+            sub_count=$(wc -l < "$SUBS_REGISTRY_INTERACTIVE")
+            sub_list=$(tr '\n' ',' < "$SUBS_REGISTRY_INTERACTIVE" | sed 's/,$//' | sed 's/,/, /g')
+            echo "Interactive:    ✅ $sub_count shell subscriber(s) registered."
             echo "Subscribers:    [ $sub_list ]"
         else
-            echo "Active Shells:  ❌ No subscribers registered."
+            echo "Interactive:    ❌ No interactive subscribers registered."
+        fi
+        if [[ -f "$SUBS_REGISTRY_NON_INTERACTIVE" ]]; then
+            sub_count=$(wc -l < "$SUBS_REGISTRY_NON_INTERACTIVE")
+            echo "Non-Interactive: ✅ $sub_count process subscriber(s) registered."
+            while read -r pid; do
+                [[ -n "$pid" ]] || continue
+                proc_line=$(ps -p "$pid" -o pid=,tty=,comm=,args= 2>/dev/null)
+                [[ -n "$proc_line" ]] || continue
+                proc_pid=$(echo "$proc_line" | awk '{print $1}')
+                proc_tty=$(echo "$proc_line" | awk '{print $2}')
+                proc_comm=$(echo "$proc_line" | awk '{print $3}')
+                proc_args=$(echo "$proc_line" | awk '{$1=$2=$3=""; sub(/^   */, ""); print}')
+                echo "  - PID: $proc_pid | TTY: $proc_tty | Comm: $proc_comm"
+                echo "    Cmd: $proc_args"
+            done < "$SUBS_REGISTRY_NON_INTERACTIVE"
+        else
+            echo "Non-Interactive: ❌ No non-interactive subscribers registered."
         fi
         if [[ -f "$KEYS_REGISTRY" ]]; then
             key_count=$(wc -l < "$KEYS_REGISTRY")

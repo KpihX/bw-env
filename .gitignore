@@ -5,3 +5,5 @@ MEMORY.md
 *.lock
 *.state
 *.lastsync
+__pycache__/
+*.pyc

@@ -34,54 +34,60 @@ The system is built on the principle that **nothing is trusted by default**, and
 
 ## 🚀 2. Installation & Setup Guide
 
-### 1. Shell Integration
-Add the following function to your `~/.zshrc` (or `~/.kshrc` / `~/.bashrc`) to enable the `bw-env` command and automatic loading:
+### 1. Binary Installation
+Create a global wrapper to access `bw-env` from any script or terminal:
 
 ```bash
-# === BW-ENV Management (Bitwarden) ===
-bw-env() {
-    bash $HOME/Work/sh/bw-env/main.sh "$@"
-    local ret=$?
-    # Refresh terminal environment after a successful unlock or sync
-    if [[ $ret -eq 0 && "$1" != "status" && "$1" != "help" && "$1" != "lock" && "$1" != "purge" ]]; then
-        source $HOME/Work/sh/bw-env/load.sh
-    fi
-    # Trigger local shell revocation on lock or purge
-    if [[ "$1" == "lock" || "$1" == "purge" ]]; then
-        kill -SIGUSR2 $$ 2>/dev/null
-    fi
-    return $ret
-}
-# Initial load on terminal startup (Non-blocking)
-source $HOME/Work/sh/bw-env/load.sh
+# Create the binary wrapper
+cat <<EOF > ~/.local/bin/bw-env
+#!/bin/bash
+exec bash \$HOME/Work/sh/bw-env/main.sh "\$@"
+EOF
+
+# Make it executable
+chmod +x ~/.local/bin/bw-env
 ```
 
-### 2. Configuration (`.env`)
-The system is 100% flexible. All parameters are centralized in `~/Work/sh/bw-env/.env`. A template is provided in `.env.example`:
+### 2. Shell Integration
+`bw-env` now ships a dedicated shell bootstrap bundle:
+
+- `shell.sh`: the `bw-env` shell wrapper plus shell-side commands (`get`, `drop`)
+- `load.sh`: non-blocking RAM injection and local revocation hooks
+- `profile.sh`: reusable top-of-shell snippet for `~/.kshrc`
+
+Recommended integration:
 
 ```bash
-# Bitwarden Item ID: The unique UUID of the secure note.
-ITEM_ID="your-uuid-here"
-
-# Cryptography
-INTERNAL_SALT="your-salt-here"
-MAX_AUTH_ATTEMPTS=3
-
-# Paths & Bridges
-CACHE_GPG="$HOME/.bw/env/cache.env.gpg"
-TEMP_ENV="/dev/shm/bw-$USER.env"
-SESSION_FILE="/dev/shm/bw-session-$USER"
-GPG_BRIDGE_FILE="/dev/shm/bw-gpg-$USER"
-LOCK_FILE="/dev/shm/bw-env-$USER.lock"
-
-# Daemon Control
-DAEMON_PID_FILE="/dev/shm/bw-env-daemon-$USER.pid"
-DAEMON_STATE_FILE="/dev/shm/bw-env-daemon-$USER.state"
-LAST_SYNC_FILE="/dev/shm/bw-env-$USER.lastsync"
-CHECK_INTERVAL=300
+[ -f "$HOME/Work/sh/bw-env/profile.sh" ] && source "$HOME/Work/sh/bw-env/profile.sh"
 ```
 
-### 3. Background Sync & Auto-Lock (Systemd)
+### 3. Configuration (`.env`)
+The system is 100% flexible. All user-facing runtime settings are centralized in `~/Work/sh/bw-env/.env`. A template is provided in `.env.example`.
+
+The recommended read/write interface is now the CLI itself:
+
+```bash
+bw-env config list
+bw-env config list --json
+bw-env config get CHECK_INTERVAL
+bw-env config set CHECK_INTERVAL 120
+```
+
+Relevant GUI-facing settings include:
+
+- `ITEM_ID`
+- `CHECK_INTERVAL`
+- `MAX_AUTH_ATTEMPTS`
+- `WAKE_DEBOUNCE_DELAY`
+- `GRAPHICAL_WAIT_DELAY`
+- `GRAPHICAL_WAIT_MAX`
+- `AUTO_START_ON_BOOT`
+- `AUTO_START_ON_WAKE`
+- `LOCK_TIMEOUT`
+- `LOAD_WAIT_MAX`
+- `LOAD_WAIT_STEP`
+
+### 4. Background Sync & Auto-Lock (Systemd)
 Install the user service for proactive security:
 
 1.  **Create unit file**: `~/.config/systemd/user/bw-env-sync.service`
@@ -93,6 +99,40 @@ Install the user service for proactive security:
     ```
 3.  **Enable**: `systemctl --user enable --now bw-env-sync.service`
 
+### 5. Tray & Control Center
+BW-ENV now includes:
+
+- `bw-env gui`: opens the graphical control center
+- `bw-env tray start`: starts the persistent tray icon
+- `bw-env tray open`: opens the control center from CLI
+- `bw-env tray install`: installs and enables the user service automatically
+
+The tray is intentionally thin:
+
+- the icon color reflects the current state
+- the AppIndicator menu exposes direct actions (`unlock`, `sync`, `lock`, `pause`, `resume`, `start`, `stop`, `restart`)
+- the control center exposes the full status, subscriber lists, and relevant settings
+
+Required graphical stack:
+
+- `python3-gi`
+- `gir1.2-gtk-3.0`
+- `gir1.2-ayatanaappindicator3-0.1`
+- `python3` with `tkinter` available for the control-center window
+
+The shipped user-service template is:
+
+- `gui/bw-env-tray.service`
+
+Typical installation:
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp ~/Work/sh/bw-env/gui/bw-env-tray.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now bw-env-tray.service
+```
+
 ---
 
 ## 🤖 3. Reactive Intelligence & Collective Security
@@ -100,7 +140,7 @@ Install the user service for proactive security:
 BW-ENV is not just a script; it's a reactive ecosystem where every component communicates in real-time.
 
 ### 📡 Global Revocation (Pub-Sub Model)
-- **Subscriber Registry**: Every active terminal registers its PID in a shared list.
+- **Split Subscriber Registries**: Interactive shells and non-interactive processes are tracked separately.
 - **Signal Broadcast**: Upon a `lock` or `purge`, the system broadcasts a **`SIGUSR2`** signal to all registered shells.
 - **Instant Purge**: Each shell reacts to the signal by immediately unsetting all secrets from its memory, ensuring a system-wide security wipe in milliseconds.
 
@@ -111,27 +151,7 @@ BW-ENV is not just a script; it's a reactive ecosystem where every component com
 ### 💤 Smart Daemon (Gentleman Mode)
 - **Interruptible Sleep**: The daemon uses an interruptible `wait` loop, allowing it to react instantly to **`SIGUSR1`** (Resume) or **`SIGUSR2`** (Pause) signals.
 - **Auto-Healing**: The CLI automatically detects if the daemon is stopped and restarts it upon a successful manual unlock.
-
----
-
-## 📡 3. Reactive Intelligence & Global Revocation
-
-BW-ENV is not just a script; it's a reactive ecosystem where every component communicates in real-time.
-
-### 📡 Global Revocation (Pub-Sub Model)
-- **Subscriber Registry**: Every active terminal registers its PID in a shared list.
-- **Signal Broadcast**: Upon a `lock` or `purge`, the system broadcasts a **`SIGUSR2`** signal to all registered shells.
-- **Instant Purge**: Each shell reacts to the signal by immediately unsetting all secrets from its memory, ensuring a system-wide security wipe in milliseconds.
-
-### 🛡️ Proactive Auto-Lockdown
-- **D-Bus Integration**: A supervised monitor listens for system-wide signals (`PrepareForSleep`, `LockedHint`).
-- **Reactive Purge**: Secrets are instantly wiped from RAM when you close your laptop or lock your screen.
-
-### 🚀 Resilience & Anti-Spam
-- **Anti-Spam Notifications**: Desktop notifications are intelligent; they only trigger when the daemon's state actually changes.
--   **Wake-up Resilience**: Upon system wake-up, the daemon implements a two-stage stabilization delay (configurable via `.env`) to ensure the graphical session is fully ready before triggering Zenity.
--   **Graphical Context Awareness**: The daemon automatically injects `DISPLAY` and `DBUS` context, ensuring reliable UI interaction even when running as a background systemd service.
--   **Zero-Hardcoding**: Every timeout, delay, and path is centralized in the `.env` file for maximum portability.
+- **Boot / Wake Policy**: `AUTO_START_ON_BOOT` and `AUTO_START_ON_WAKE` control whether the daemon auto-activates after startup or wake. When disabled, the daemon stays in `PAUSED` instead of opening a prompt.
 
 ---
 
@@ -142,6 +162,8 @@ The system is 100% flexible. Key parameters include:
 - `WAKE_DEBOUNCE_DELAY`: Time to wait after a wake signal before acting.
 - `GRAPHICAL_WAIT_DELAY`: Safety buffer for Zenity display.
 - `CHECK_INTERVAL`: Background sync frequency.
+- `AUTO_START_ON_BOOT`: Whether the daemon performs an initial sync at startup.
+- `AUTO_START_ON_WAKE`: Whether the daemon auto-resumes after wake events.
 
 ### 🚦 Concurrency & Transparency
 - **Atomic Locking**: Uses `flock` with **PID transparency**. You can always see exactly which process holds the lock via `bw-env status`.
@@ -155,7 +177,14 @@ The system is 100% flexible. Key parameters include:
 | :--- | :--- | :--- |
 | `bw-env unlock` | **Primary** | Prompts for password, syncs vault, and establishes RAM bridges. |
 | `bw-env sync` | **Refresh** | Force-synchronizes local data. Uses bridges for silent background updates. |
-| `bw-env status` | **Audit** | Full visibility: Daemon state, RAM/Disk caches, Bridges, and Active Shells. |
+| `bw-env status` | **Audit** | Full visibility: Daemon state, RAM/Disk caches, Bridges, and active subscribers. |
+| `bw-env status --json` | **Audit / API** | Structured machine-readable status for GUIs and local integrations. |
+| `bw-env config list` | **Settings** | Lists the relevant user-facing configuration surface. |
+| `bw-env config set KEY VALUE` | **Settings** | Updates one relevant runtime setting inside `.env`. |
+| `bw-env gui` | **GUI** | Opens the graphical control center (Overview / Subscribers / Settings). |
+| `bw-env tray start` | **GUI / Tray** | Starts the persistent AppIndicator tray with direct menu actions. |
+| `bw-env tray open` | **GUI / Tray** | Opens the control center directly. |
+| `bw-env tray install` | **GUI / Tray** | Installs the tray user service and enables it automatically when the user systemd bus is reachable. |
 | `bw-env lock` | **Security** | Purges RAM, closes bridges, and triggers **Global Revocation**. |
 | `bw-env purge` | **Nuclear** | **Total Destruction**: Stops daemon, wipes RAM/Disk, and revokes all shells. |
 | `bw-env decrypt`| **Offline** | Restores environment from encrypted disk cache (No network required). |
@@ -189,6 +218,7 @@ BW-ENV uses **Journald** for maximum transparency.
 
 ### Service & Sync Health
 - **Systemd Status**: `systemctl --user status bw-env-sync.service`.
+- **Tray Status**: `ps -fp "$(cat /dev/shm/bw-env-tray-$USER.pid 2>/dev/null)"`.
 - **Bitwarden Status**: `bw status`.
 - **Trace Execution**: `bash -x ~/Work/sh/bw-env/main.sh [command]`.
 
