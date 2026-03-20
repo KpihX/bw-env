@@ -47,7 +47,7 @@ class Backend:
 
     def open_control_center(self) -> None:
         subprocess.Popen(
-            ["bash", "-lc", f"python3 '{CONTROL_CENTER}'"],
+            ["/usr/bin/python3", str(CONTROL_CENTER)],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )

@@ -714,7 +714,7 @@ case "$1" in
         exit 1
         ;;
     gui)
-        exec python3 "$UTILS_DIR/gui/control_center.py"
+        exec /usr/bin/python3 "$UTILS_DIR/gui/control_center.py"
         ;;
     tray)
         shift

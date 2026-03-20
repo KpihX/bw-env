@@ -118,7 +118,7 @@ Required graphical stack:
 - `python3-gi`
 - `gir1.2-gtk-3.0`
 - `gir1.2-ayatanaappindicator3-0.1`
-- `python3` with `tkinter` available for the control-center window
+- `/usr/bin/python3` with `gi` available for both the tray and the control-center window
 
 The shipped user-service template is:
 
@@ -181,7 +181,7 @@ The system is 100% flexible. Key parameters include:
 | `bw-env status --json` | **Audit / API** | Structured machine-readable status for GUIs and local integrations. |
 | `bw-env config list` | **Settings** | Lists the relevant user-facing configuration surface. |
 | `bw-env config set KEY VALUE` | **Settings** | Updates one relevant runtime setting inside `.env`. |
-| `bw-env gui` | **GUI** | Opens the graphical control center (Overview / Subscribers / Settings). |
+| `bw-env gui` | **GUI** | Opens the native GTK control center (Overview / Subscribers / Settings). |
 | `bw-env tray start` | **GUI / Tray** | Starts the persistent AppIndicator tray with direct menu actions. |
 | `bw-env tray open` | **GUI / Tray** | Opens the control center directly. |
 | `bw-env tray install` | **GUI / Tray** | Installs the tray user service and enables it automatically when the user systemd bus is reachable. |

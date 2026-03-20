@@ -16,7 +16,7 @@ have_user_systemd() {
 }
 
 open_control_center() {
-    nohup bash -lc "python3 '$CONTROL_CENTER'" >/tmp/bw-env-gui.log 2>&1 &
+    nohup /usr/bin/python3 "$CONTROL_CENTER" >/tmp/bw-env-gui.log 2>&1 &
 }
 
 tray_pid() {

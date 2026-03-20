@@ -1,19 +1,113 @@
-#!/usr/bin/env python3
-"""BW-ENV control center."""
+#!/usr/bin/python3
+"""BW-ENV GTK control center."""
 
 from __future__ import annotations
 
 import json
 import subprocess
 import threading
-import tkinter as tk
 from pathlib import Path
-from tkinter import messagebox, ttk
+
+import gi
+
+gi.require_version("Gtk", "3.0")
+
+from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[1]
 MAIN_SH = ROOT / "main.sh"
 POLL_MS = 3000
+
+CSS = b"""
+window {
+  background: #0f141c;
+  color: #e6edf7;
+}
+#root {
+  background: #0f141c;
+}
+#panel,
+#subpanel,
+#settings-frame {
+  background: #171d27;
+  border: 1px solid #303c4f;
+  border-radius: 12px;
+}
+#subpanel {
+  background: #1c2330;
+}
+headerbar {
+  background: #121923;
+  border-bottom: 1px solid #303c4f;
+}
+headerbar title {
+  color: #f8fafc;
+}
+button {
+  background: #212b3a;
+  color: #e6edf7;
+  border: 1px solid #3a475d;
+  border-radius: 10px;
+  box-shadow: none;
+}
+button:hover {
+  background: #2a3647;
+}
+entry,
+combobox box,
+combobox button,
+textview,
+textview text {
+  background: #1b2431;
+  color: #e6edf7;
+  border-color: #344256;
+}
+notebook header tab {
+  background: #1c2431;
+  color: #9fb0c7;
+  border-radius: 10px 10px 0 0;
+  padding: 8px 14px;
+}
+notebook header tab:checked {
+  background: #273244;
+  color: #f8fafc;
+}
+.section-title {
+  font-weight: 700;
+  color: #f8fafc;
+}
+.value-label {
+  color: #d8e1ee;
+}
+.muted {
+  color: #97a6ba;
+}
+.badge {
+  border-radius: 999px;
+  padding: 8px 14px;
+  color: #f8fafc;
+  font-weight: 700;
+}
+.badge-ok {
+  background: #1f9d69;
+}
+.badge-warn {
+  background: #c8921b;
+}
+.badge-error {
+  background: #c65368;
+}
+.badge-info {
+  background: #4f8cff;
+}
+.badge-violet {
+  background: #8667f2;
+}
+.badge-muted {
+  background: #5f7087;
+}
+"""
 
 
 class BwEnvBackend:
@@ -50,381 +144,288 @@ class BwEnvBackend:
             raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"{command} failed")
 
 
-class ControlCenter:
-    """Main control-center window."""
+class ControlCenter(Gtk.Window):
+    """Main GTK control-center window."""
 
     def __init__(self) -> None:
+        super().__init__(title="BW-ENV")
         self.backend = BwEnvBackend()
-        self.root = tk.Tk()
-        self.root.title("BW-ENV")
-        self.root.geometry("1120x760")
-        self.root.minsize(960, 640)
-        self.palette = {
-            "bg": "#11161d",
-            "panel": "#171d27",
-            "panel_alt": "#1f2836",
-            "border": "#344256",
-            "text": "#e6edf7",
-            "muted": "#97a6ba",
-            "green": "#1f9d69",
-            "amber": "#c8921b",
-            "red": "#c65368",
-            "blue": "#4f8cff",
-            "violet": "#8667f2",
-            "gray": "#5f7087",
-        }
-        self.root.configure(bg=self.palette["bg"])
-        self._configure_styles()
+        self.set_default_size(1180, 820)
+        self.set_size_request(980, 680)
+        self.connect("destroy", Gtk.main_quit)
+        self._refresh_inflight = False
+        self.badges: dict[str, Gtk.Label] = {}
+        self.value_labels: dict[str, Gtk.Label] = {}
+        self.settings_widgets: dict[str, Gtk.Widget] = {}
 
-        self.status_vars = {
-            "daemon": tk.StringVar(value="Loading..."),
-            "vault": tk.StringVar(value="Loading..."),
-            "last_sync": tk.StringVar(value="Loading..."),
-            "interval": tk.StringVar(value="Loading..."),
-            "concurrency": tk.StringVar(value="Loading..."),
-            "ram_cache": tk.StringVar(value="Loading..."),
-            "disk_cache": tk.StringVar(value="Loading..."),
-            "shared_bridge": tk.StringVar(value="Loading..."),
-            "gpg_bridge": tk.StringVar(value="Loading..."),
-            "keys": tk.StringVar(value="Loading..."),
-            "details": tk.StringVar(value="Loading..."),
-        }
-        self.settings_vars: dict[str, tk.StringVar] = {}
-        self.badges: dict[str, tk.Label] = {}
-        self._refresh_scheduled = False
-
+        self._install_css()
         self._build_ui()
         self.refresh()
+        GLib.timeout_add(POLL_MS, self.refresh)
 
-    def _configure_styles(self) -> None:
-        style = ttk.Style()
-        style.theme_use("clam")
-        style.configure(".", background=self.palette["bg"], foreground=self.palette["text"])
-        style.configure("TFrame", background=self.palette["bg"])
-        style.configure("TLabel", background=self.palette["bg"], foreground=self.palette["text"])
-        style.configure("TLabelframe", background=self.palette["panel"], foreground=self.palette["text"], bordercolor=self.palette["border"])
-        style.configure("TLabelframe.Label", background=self.palette["panel"], foreground=self.palette["text"])
-        style.configure("TButton", background=self.palette["panel_alt"], foreground=self.palette["text"], bordercolor=self.palette["border"], focusthickness=0)
-        style.map("TButton", background=[("active", self.palette["border"])])
-        style.configure("TNotebook", background=self.palette["bg"], borderwidth=0)
-        style.configure("TNotebook.Tab", background=self.palette["panel_alt"], foreground=self.palette["text"], padding=(14, 8))
-        style.map(
-            "TNotebook.Tab",
-            background=[("selected", self.palette["panel"])],
-            foreground=[("selected", self.palette["text"])],
+    def _install_css(self) -> None:
+        provider = Gtk.CssProvider()
+        provider.load_from_data(CSS)
+        Gtk.StyleContext.add_provider_for_screen(
+            Gdk.Screen.get_default(),
+            provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
         )
-        style.configure(
-            "TEntry",
-            fieldbackground=self.palette["panel_alt"],
-            foreground=self.palette["text"],
-            insertcolor=self.palette["text"],
-            bordercolor=self.palette["border"],
-        )
-        style.configure(
-            "TCombobox",
-            fieldbackground=self.palette["panel_alt"],
-            background=self.palette["panel_alt"],
-            foreground=self.palette["text"],
-            arrowcolor=self.palette["text"],
-            bordercolor=self.palette["border"],
-        )
-        style.map(
-            "TCombobox",
-            fieldbackground=[("readonly", self.palette["panel_alt"])],
-            background=[("readonly", self.palette["panel_alt"])],
-            foreground=[("readonly", self.palette["text"])],
-            selectbackground=[("readonly", self.palette["panel_alt"])],
-            selectforeground=[("readonly", self.palette["text"])],
-            arrowcolor=[("readonly", self.palette["text"])],
-        )
-        self.root.option_add("*TCombobox*Listbox.background", self.palette["panel_alt"])
-        self.root.option_add("*TCombobox*Listbox.foreground", self.palette["text"])
-        self.root.option_add("*TCombobox*Listbox.selectBackground", self.palette["blue"])
-        self.root.option_add("*TCombobox*Listbox.selectForeground", self.palette["text"])
 
     def _build_ui(self) -> None:
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(1, weight=1)
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        root.set_name("root")
+        root.set_border_width(16)
+        self.add(root)
 
-        header = ttk.Frame(self.root, padding=16)
-        header.grid(row=0, column=0, sticky="ew")
-        header.columnconfigure(0, weight=1)
+        header = Gtk.HeaderBar()
+        header.set_show_close_button(True)
+        header.set_title("BW-ENV")
+        self.set_titlebar(header)
 
-        title = tk.Label(
-            header,
-            text="BW-ENV",
-            font=("TkDefaultFont", 22, "bold"),
-            bg=self.palette["bg"],
-            fg=self.palette["text"],
-        )
-        title.grid(row=0, column=0, sticky="w")
+        actions = Gtk.Box(spacing=8)
+        for label, command in [
+            ("Unlock", "unlock"),
+            ("Sync", "sync"),
+            ("Lock", "lock"),
+            ("Pause", "pause"),
+            ("Resume", "resume"),
+            ("Start", "start"),
+            ("Stop", "stop"),
+            ("Restart", "restart"),
+            ("Refresh", "__refresh__"),
+        ]:
+            button = Gtk.Button(label=label)
+            if command == "__refresh__":
+                button.connect("clicked", lambda *_: self.refresh())
+            else:
+                button.connect("clicked", lambda _btn, cmd=command: self.run_action(cmd))
+            actions.pack_start(button, False, False, 0)
+        root.pack_start(actions, False, False, 0)
 
-        actions = ttk.Frame(header)
-        actions.grid(row=1, column=0, sticky="ew", pady=(12, 0))
+        notebook = Gtk.Notebook()
+        root.pack_start(notebook, True, True, 0)
 
-        for idx, (label, command) in enumerate(
-            [
-                ("Unlock", "unlock"),
-                ("Sync", "sync"),
-                ("Lock", "lock"),
-                ("Pause", "pause"),
-                ("Resume", "resume"),
-                ("Start", "start"),
-                ("Stop", "stop"),
-                ("Restart", "restart"),
-                ("Refresh", "__refresh__"),
-            ]
-        ):
-            callback = self.refresh if command == "__refresh__" else lambda cmd=command: self.run_action(cmd)
-            ttk.Button(actions, text=label, command=callback).grid(row=0, column=idx, padx=(0, 8))
+        notebook.append_page(self._build_overview_tab(), Gtk.Label(label="Overview"))
+        notebook.append_page(self._build_subscribers_tab(), Gtk.Label(label="Subscribers"))
+        notebook.append_page(self._build_settings_tab(), Gtk.Label(label="Settings"))
 
-        notebook = ttk.Notebook(self.root)
-        notebook.grid(row=1, column=0, sticky="nsew", padx=16, pady=(0, 16))
+    def _build_overview_tab(self) -> Gtk.Widget:
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
 
-        self.overview_tab = ttk.Frame(notebook, padding=16)
-        self.subscribers_tab = ttk.Frame(notebook, padding=16)
-        self.settings_tab = ttk.Frame(notebook, padding=16)
+        badges_frame = self._frame("Status Badges")
+        badges_box = Gtk.FlowBox()
+        badges_box.set_max_children_per_line(8)
+        badges_box.set_selection_mode(Gtk.SelectionMode.NONE)
+        badges_box.set_column_spacing(10)
+        badges_box.set_row_spacing(10)
+        badges_box.set_homogeneous(True)
 
-        notebook.add(self.overview_tab, text="Overview")
-        notebook.add(self.subscribers_tab, text="Subscribers")
-        notebook.add(self.settings_tab, text="Settings")
+        for key in ["Daemon", "Vault", "RAM", "Disk", "Shared", "GPG", "Subscribers", "Keys"]:
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+            title = Gtk.Label(label=key)
+            title.get_style_context().add_class("muted")
+            title.set_xalign(0.5)
+            badge = Gtk.Label(label="...")
+            badge.get_style_context().add_class("badge")
+            badge.get_style_context().add_class("badge-muted")
+            self.badges[key.lower()] = badge
+            box.pack_start(title, False, False, 0)
+            box.pack_start(badge, False, False, 0)
+            badges_box.add(box)
 
-        self._build_overview_tab()
-        self._build_subscribers_tab()
-        self._build_settings_tab()
+        badges_frame.add(badges_box)
+        outer.pack_start(badges_frame, False, False, 0)
 
-    def _build_overview_tab(self) -> None:
-        self.overview_tab.columnconfigure(0, weight=1)
-        self.overview_tab.columnconfigure(1, weight=2)
-        self.overview_tab.rowconfigure(2, weight=1)
+        top = Gtk.Paned.new(Gtk.Orientation.HORIZONTAL)
+        top.pack1(self._build_runtime_frame(), resize=True, shrink=False)
+        top.pack2(self._build_storage_frame(), resize=True, shrink=False)
+        outer.pack_start(top, False, False, 0)
 
-        badges = ttk.LabelFrame(self.overview_tab, text="Status Badges", padding=16)
-        badges.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+        bottom = Gtk.Paned.new(Gtk.Orientation.HORIZONTAL)
+        bottom.pack1(self._build_text_frame("Secrets", "keys"), resize=True, shrink=False)
+        bottom.pack2(self._build_text_frame("Status Details", "details"), resize=True, shrink=False)
+        outer.pack_start(bottom, True, True, 0)
 
-        for idx, label in enumerate(["Daemon", "Vault", "RAM", "Disk", "Shared", "GPG", "Subscribers", "Keys"]):
-            container = ttk.Frame(badges)
-            container.grid(row=0, column=idx, padx=6, sticky="nsew")
-            ttk.Label(container, text=label).grid(row=0, column=0, sticky="ew")
-            badge = tk.Label(
-                container,
-                text="...",
-                bg=self.palette["gray"],
-                fg=self.palette["text"],
-                padx=12,
-                pady=6,
-                relief="ridge",
-                bd=1,
-            )
-            badge.grid(row=1, column=0, sticky="ew", pady=(6, 0))
-            self.badges[label.lower()] = badge
+        return outer
 
-        runtime = ttk.LabelFrame(self.overview_tab, text="Runtime", padding=16)
-        runtime.grid(row=1, column=0, sticky="nsew", padx=(0, 8), pady=(0, 8))
-        runtime.columnconfigure(1, weight=1)
+    def _build_runtime_frame(self) -> Gtk.Widget:
+        frame = self._frame("Runtime")
+        grid = Gtk.Grid(column_spacing=12, row_spacing=8)
+        for row, key in enumerate(["daemon", "vault", "last_sync", "interval", "concurrency"]):
+            label = Gtk.Label(label=self._pretty_key(key) + ":")
+            label.get_style_context().add_class("section-title")
+            label.set_xalign(0)
+            value = Gtk.Label(label="Loading...")
+            value.get_style_context().add_class("value-label")
+            value.set_xalign(0)
+            value.set_line_wrap(True)
+            self.value_labels[key] = value
+            grid.attach(label, 0, row, 1, 1)
+            grid.attach(value, 1, row, 1, 1)
+        frame.add(grid)
+        return frame
 
-        self._add_kv(runtime, 0, "Daemon", self.status_vars["daemon"])
-        self._add_kv(runtime, 1, "Vault", self.status_vars["vault"])
-        self._add_kv(runtime, 2, "Last Sync", self.status_vars["last_sync"])
-        self._add_kv(runtime, 3, "Sync Interval", self.status_vars["interval"])
-        self._add_kv(runtime, 4, "Concurrency", self.status_vars["concurrency"])
+    def _build_storage_frame(self) -> Gtk.Widget:
+        frame = self._frame("Storage & Bridges")
+        grid = Gtk.Grid(column_spacing=12, row_spacing=8)
+        for row, key in enumerate(["ram_cache", "disk_cache", "shared_bridge", "gpg_bridge"]):
+            label = Gtk.Label(label=self._pretty_key(key) + ":")
+            label.get_style_context().add_class("section-title")
+            label.set_xalign(0)
+            value = Gtk.Label(label="Loading...")
+            value.get_style_context().add_class("value-label")
+            value.set_xalign(0)
+            value.set_line_wrap(True)
+            self.value_labels[key] = value
+            grid.attach(label, 0, row, 1, 1)
+            grid.attach(value, 1, row, 1, 1)
+        frame.add(grid)
+        return frame
 
-        storage = ttk.LabelFrame(self.overview_tab, text="Storage & Bridges", padding=16)
-        storage.grid(row=1, column=1, sticky="nsew", padx=(8, 0), pady=(0, 8))
-        storage.columnconfigure(1, weight=1)
+    def _build_text_frame(self, title: str, key: str) -> Gtk.Widget:
+        frame = self._frame(title)
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        textview = Gtk.TextView()
+        textview.set_wrap_mode(Gtk.WrapMode.WORD)
+        textview.set_editable(False)
+        textview.set_cursor_visible(False)
+        textview.set_monospace(True)
+        setattr(self, f"{key}_textview", textview)
+        scrolled.add(textview)
+        frame.add(scrolled)
+        return frame
 
-        self._add_kv(storage, 0, "RAM Cache", self.status_vars["ram_cache"])
-        self._add_kv(storage, 1, "Disk Cache", self.status_vars["disk_cache"])
-        self._add_kv(storage, 2, "Shared Bridge", self.status_vars["shared_bridge"])
-        self._add_kv(storage, 3, "GPG Bridge", self.status_vars["gpg_bridge"])
+    def _build_subscribers_tab(self) -> Gtk.Widget:
+        paned = Gtk.Paned.new(Gtk.Orientation.HORIZONTAL)
+        paned.pack1(self._build_text_frame("Interactive Shells", "interactive"), resize=True, shrink=False)
+        paned.pack2(self._build_text_frame("Non-Interactive Processes", "non_interactive"), resize=True, shrink=False)
+        return paned
 
-        keys = ttk.LabelFrame(self.overview_tab, text="Secrets", padding=16)
-        keys.grid(row=2, column=0, sticky="nsew", padx=(0, 8), pady=(8, 0))
-        keys.columnconfigure(0, weight=1)
-        keys.rowconfigure(0, weight=1)
+    def _build_settings_tab(self) -> Gtk.Widget:
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
 
-        self.keys_text = tk.Text(
-            keys,
-            wrap="word",
-            height=14,
-            bg=self.palette["panel_alt"],
-            fg=self.palette["text"],
-            insertbackground=self.palette["text"],
-            relief="flat",
-            padx=12,
-            pady=12,
-        )
-        self.keys_text.grid(row=0, column=0, sticky="nsew")
-        self.keys_text.configure(state="disabled")
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        scrolled.add(box)
 
-        details = ttk.LabelFrame(self.overview_tab, text="Status Details", padding=16)
-        details.grid(row=2, column=1, sticky="nsew", padx=(8, 0), pady=(8, 0))
-        details.columnconfigure(0, weight=1)
-        details.rowconfigure(0, weight=1)
-
-        self.details_text = tk.Text(details, wrap="word", height=14)
-        self.details_text.grid(row=0, column=0, sticky="nsew")
-        self.details_text.configure(
-            bg=self.palette["panel_alt"],
-            fg=self.palette["text"],
-            insertbackground=self.palette["text"],
-            relief="flat",
-            padx=12,
-            pady=12,
-        )
-        self.details_text.configure(state="disabled")
-
-    def _build_subscribers_tab(self) -> None:
-        self.subscribers_tab.columnconfigure(0, weight=1)
-        self.subscribers_tab.columnconfigure(1, weight=1)
-        self.subscribers_tab.rowconfigure(0, weight=1)
-
-        interactive_frame = ttk.LabelFrame(self.subscribers_tab, text="Interactive Shells", padding=12)
-        interactive_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
-        interactive_frame.rowconfigure(0, weight=1)
-        interactive_frame.columnconfigure(0, weight=1)
-
-        non_interactive_frame = ttk.LabelFrame(self.subscribers_tab, text="Non-Interactive Processes", padding=12)
-        non_interactive_frame.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
-        non_interactive_frame.rowconfigure(0, weight=1)
-        non_interactive_frame.columnconfigure(0, weight=1)
-
-        self.interactive_text = tk.Text(interactive_frame, wrap="word", height=20)
-        self.interactive_text.grid(row=0, column=0, sticky="nsew")
-        self.interactive_text.configure(
-            bg=self.palette["panel_alt"],
-            fg=self.palette["text"],
-            insertbackground=self.palette["text"],
-            relief="flat",
-            padx=12,
-            pady=12,
-        )
-        self.interactive_text.configure(state="disabled")
-
-        self.non_interactive_text = tk.Text(non_interactive_frame, wrap="word", height=20)
-        self.non_interactive_text.grid(row=0, column=0, sticky="nsew")
-        self.non_interactive_text.configure(
-            bg=self.palette["panel_alt"],
-            fg=self.palette["text"],
-            insertbackground=self.palette["text"],
-            relief="flat",
-            padx=12,
-            pady=12,
-        )
-        self.non_interactive_text.configure(state="disabled")
-
-    def _build_settings_tab(self) -> None:
-        self.settings_tab.columnconfigure(0, weight=1)
-        self.settings_tab.rowconfigure(0, weight=1)
-
-        container = ttk.Frame(self.settings_tab)
-        container.grid(row=0, column=0, sticky="nsew")
-        container.columnconfigure(0, weight=1)
-        container.rowconfigure(0, weight=1)
-
-        canvas = tk.Canvas(
-            container,
-            bg=self.palette["bg"],
-            highlightthickness=0,
-            bd=0,
-        )
-        scrollbar = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
-        frame = ttk.Frame(canvas)
-        frame.columnconfigure(1, weight=1)
-
-        frame.bind(
-            "<Configure>",
-            lambda event: canvas.configure(scrollregion=canvas.bbox("all")),
-        )
-        canvas_window = canvas.create_window((0, 0), window=frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-        canvas.grid(row=0, column=0, sticky="nsew")
-        scrollbar.grid(row=0, column=1, sticky="ns")
-        canvas.bind(
-            "<Configure>",
-            lambda event: canvas.itemconfigure(canvas_window, width=event.width),
-        )
-
-        def _on_mousewheel(event: tk.Event) -> None:
-            delta = -1 * int(event.delta / 120) if event.delta else 0
-            canvas.yview_scroll(delta or -1, "units")
-
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
-
-        grouped_settings = [
+        for section_title, keys in [
             ("Daemon", ["CHECK_INTERVAL", "MAX_AUTH_ATTEMPTS", "AUTO_START_ON_BOOT", "AUTO_START_ON_WAKE"]),
             ("Wake / UX", ["WAKE_DEBOUNCE_DELAY", "GRAPHICAL_WAIT_DELAY", "GRAPHICAL_WAIT_MAX"]),
             ("Concurrency / Shell", ["LOCK_TIMEOUT", "LOAD_WAIT_MAX", "LOAD_WAIT_STEP"]),
             ("Vault / Identity", ["ITEM_ID", "AUTHORIZED_USER", "CACHE_GPG"]),
             ("Logging", ["DAEMON_TAG", "LOG_TAG"]),
-        ]
-
-        row = 0
-        for title, keys in grouped_settings:
-            section = ttk.LabelFrame(frame, text=title, padding=12)
-            section.grid(row=row, column=0, sticky="ew", pady=(0, 10))
-            section.columnconfigure(1, weight=1)
-            for idx, key in enumerate(keys):
-                ttk.Label(section, text=key).grid(row=idx, column=0, sticky="w", padx=(0, 12), pady=4)
-                var = tk.StringVar()
-                self.settings_vars[key] = var
+        ]:
+            frame = self._frame(section_title, "settings-frame")
+            grid = Gtk.Grid(column_spacing=14, row_spacing=10)
+            for row, key in enumerate(keys):
+                label = Gtk.Label(label=key)
+                label.get_style_context().add_class("section-title")
+                label.set_xalign(0)
                 if key in {"AUTO_START_ON_BOOT", "AUTO_START_ON_WAKE"}:
-                    widget = ttk.Combobox(section, textvariable=var, values=["true", "false"], state="readonly")
-                    widget.configure(takefocus=False)
+                    widget = Gtk.ComboBoxText()
+                    widget.append_text("true")
+                    widget.append_text("false")
                 else:
-                    widget = ttk.Entry(section, textvariable=var)
-                widget.grid(row=idx, column=1, sticky="ew", pady=4)
-            row += 1
+                    widget = Gtk.Entry()
+                widget.set_hexpand(True)
+                self.settings_widgets[key] = widget
+                grid.attach(label, 0, row, 1, 1)
+                grid.attach(widget, 1, row, 1, 1)
+            frame.add(grid)
+            box.pack_start(frame, False, False, 0)
 
-        buttons = ttk.Frame(frame)
-        buttons.grid(row=row, column=0, sticky="e", pady=(8, 0))
-        ttk.Button(buttons, text="Reload", command=self.refresh).grid(row=0, column=0, padx=(0, 8))
-        ttk.Button(buttons, text="Apply Settings", command=self.apply_settings).grid(row=0, column=1)
+        buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        reload_button = Gtk.Button(label="Reload")
+        reload_button.connect("clicked", lambda *_: self.refresh())
+        apply_button = Gtk.Button(label="Apply Settings")
+        apply_button.connect("clicked", lambda *_: self.apply_settings())
+        buttons.pack_end(apply_button, False, False, 0)
+        buttons.pack_end(reload_button, False, False, 0)
+        box.pack_start(buttons, False, False, 0)
 
-    def _add_kv(self, parent: ttk.Frame, row: int, label: str, var: tk.StringVar) -> None:
-        ttk.Label(parent, text=f"{label}:", font=("TkDefaultFont", 10, "bold")).grid(
-            row=row, column=0, sticky="nw", padx=(0, 12), pady=4
-        )
-        ttk.Label(parent, textvariable=var, justify="left", anchor="w").grid(row=row, column=1, sticky="ew", pady=4)
+        return scrolled
 
-    def refresh(self) -> None:
-        if self._refresh_scheduled:
-            return
-        self._refresh_scheduled = True
+    def _frame(self, title: str, name: str = "panel") -> Gtk.Frame:
+        frame = Gtk.Frame(label=title)
+        frame.set_name(name)
+        frame.set_shadow_type(Gtk.ShadowType.NONE)
+        frame.set_margin_top(4)
+        frame.set_margin_bottom(4)
+        frame.set_margin_start(4)
+        frame.set_margin_end(4)
+        frame.set_label_align(0.03, 0.5)
+        return frame
+
+    def _pretty_key(self, key: str) -> str:
+        return key.replace("_", " ").title()
+
+    def _set_textview(self, name: str, text: str) -> None:
+        textview: Gtk.TextView = getattr(self, f"{name}_textview")
+        buffer_ = textview.get_buffer()
+        buffer_.set_text(text)
+
+    def _set_badge(self, key: str, text: str, css_class: str) -> None:
+        badge = self.badges[key]
+        badge.set_text(text)
+        context = badge.get_style_context()
+        for candidate in ["badge-ok", "badge-warn", "badge-error", "badge-info", "badge-violet", "badge-muted"]:
+            context.remove_class(candidate)
+        context.add_class(css_class)
+
+    def refresh(self) -> bool:
+        if self._refresh_inflight:
+            return True
+        self._refresh_inflight = True
         threading.Thread(target=self._refresh_worker, daemon=True).start()
+        return True
 
     def _refresh_worker(self) -> None:
         try:
             status = self.backend.status()
             config = self.backend.config()
         except Exception as exc:  # noqa: BLE001
-            self.root.after(0, lambda: messagebox.showerror("BW-ENV", str(exc)))
-            self._refresh_scheduled = False
-            self.root.after(POLL_MS, self.refresh)
+            GLib.idle_add(self._show_error, str(exc))
+            self._refresh_inflight = False
             return
 
-        self.root.after(0, lambda: self._apply_refresh(status, config))
+        GLib.idle_add(self._apply_refresh, status, config)
 
-    def _apply_refresh(self, status: dict, config: dict) -> None:
+    def _apply_refresh(self, status: dict, config: dict) -> bool:
         daemon = status["daemon"]
         storage = status["storage"]
         keys = status["keys"]
         subscribers = status["subscribers"]
 
-        daemon_text = daemon["label"]
-        if daemon.get("pid") is not None:
-            daemon_text = f'{daemon_text} (PID {daemon["pid"]})'
-        self.status_vars["daemon"].set(daemon_text)
-        self.status_vars["vault"].set("Unlocked" if status["vault"]["unlocked"] else "Locked")
-        self.status_vars["last_sync"].set(daemon["last_sync"])
-        self.status_vars["interval"].set(f'{daemon["check_interval"]} seconds')
-        self.status_vars["concurrency"].set(status["concurrency"]["message"])
-        self.status_vars["ram_cache"].set(self._storage_label(storage["ram_cache"]))
-        self.status_vars["disk_cache"].set(self._storage_label(storage["disk_cache"]))
-        self.status_vars["shared_bridge"].set(self._storage_label(storage["shared_bridge"]))
-        self.status_vars["gpg_bridge"].set(self._storage_label(storage["gpg_bridge"]))
-        key_names = ", ".join(keys["names"]) if keys["names"] else "None"
-        self._set_text(
-            self.keys_text,
+        self.value_labels["daemon"].set_text(
+            daemon["label"] if daemon.get("pid") is None else f'{daemon["label"]} (PID {daemon["pid"]})'
+        )
+        self.value_labels["vault"].set_text("Unlocked" if status["vault"]["unlocked"] else "Locked")
+        self.value_labels["last_sync"].set_text(daemon["last_sync"])
+        self.value_labels["interval"].set_text(f'{daemon["check_interval"]} seconds')
+        self.value_labels["concurrency"].set_text(status["concurrency"]["message"])
+        self.value_labels["ram_cache"].set_text(self._storage_label(storage["ram_cache"]))
+        self.value_labels["disk_cache"].set_text(self._storage_label(storage["disk_cache"]))
+        self.value_labels["shared_bridge"].set_text(self._storage_label(storage["shared_bridge"]))
+        self.value_labels["gpg_bridge"].set_text(self._storage_label(storage["gpg_bridge"]))
+
+        self._set_badge(
+            "daemon",
+            daemon["label"],
+            "badge-ok" if daemon["running"] and daemon["state"] != "PAUSED" else "badge-warn",
+        )
+        self._set_badge("vault", "Unlocked" if status["vault"]["unlocked"] else "Locked", "badge-ok" if status["vault"]["unlocked"] else "badge-error")
+        self._set_badge("ram", "Active" if storage["ram_cache"]["active"] else "Off", "badge-ok" if storage["ram_cache"]["active"] else "badge-error")
+        self._set_badge("disk", "Encrypted" if storage["disk_cache"]["active"] else "Missing", "badge-ok" if storage["disk_cache"]["active"] else "badge-error")
+        self._set_badge("shared", "Active" if storage["shared_bridge"]["active"] else "Off", "badge-ok" if storage["shared_bridge"]["active"] else "badge-muted")
+        self._set_badge("gpg", "Active" if storage["gpg_bridge"]["active"] else "Off", "badge-ok" if storage["gpg_bridge"]["active"] else "badge-muted")
+        self._set_badge("subscribers", str(len(subscribers["interactive"]) + len(subscribers["non_interactive"])), "badge-info")
+        self._set_badge("keys", str(keys["count"]), "badge-violet" if keys["count"] else "badge-muted")
+
+        key_names = "\n".join(keys["names"]) if keys["names"] else "None"
+        self._set_textview(
+            "keys",
             "\n".join(
                 [
                     f'Count: {keys["count"]}',
@@ -435,40 +436,38 @@ class ControlCenter:
                 ]
             ),
         )
-        self._update_badges(status)
-
-        self._set_text(
-            self.interactive_text,
+        self._set_textview(
+            "interactive",
             "\n".join(f"- PID {pid}" for pid in subscribers["interactive"]) or "No interactive subscribers.",
         )
-
         non_interactive_lines = []
         for proc in subscribers["non_interactive"]:
             non_interactive_lines.append(
                 f'- PID {proc["pid"]} | TTY {proc["tty"]} | Comm {proc["comm"]}\n  Cmd: {proc["args"]}'
             )
-        self._set_text(
-            self.non_interactive_text,
-            "\n\n".join(non_interactive_lines) or "No non-interactive subscribers.",
+        self._set_textview("non_interactive", "\n\n".join(non_interactive_lines) or "No non-interactive subscribers.")
+        self._set_textview(
+            "details",
+            "\n".join(
+                [
+                    f'Daemon PID: {daemon.get("pid")}',
+                    f'Daemon state: {daemon["state"]}',
+                    f'Last sync: {daemon["last_sync"]}',
+                    f'Check interval: {daemon["check_interval"]} seconds',
+                    f'Auto start on boot: {daemon["auto_start_on_boot"]}',
+                    f'Auto start on wake: {daemon["auto_start_on_wake"]}',
+                    f'Concurrency: {status["concurrency"]["state"]} | {status["concurrency"]["message"]}',
+                    f'Interactive subscribers: {len(subscribers["interactive"])}',
+                    f'Non-interactive subscribers: {len(subscribers["non_interactive"])}',
+                    f'RAM cache path: {storage["ram_cache"]["path"]}',
+                    f'Disk cache path: {storage["disk_cache"]["path"]}',
+                    f'Shared bridge path: {storage["shared_bridge"]["path"]}',
+                    f'GPG bridge path: {storage["gpg_bridge"]["path"]}',
+                ]
+            ),
         )
-        detail_lines = [
-            f'Daemon PID: {daemon.get("pid")}',
-            f'Daemon state: {daemon["state"]}',
-            f'Last sync: {daemon["last_sync"]}',
-            f'Check interval: {daemon["check_interval"]} seconds',
-            f'Auto start on boot: {daemon["auto_start_on_boot"]}',
-            f'Auto start on wake: {daemon["auto_start_on_wake"]}',
-            f'Concurrency: {status["concurrency"]["state"]} | {status["concurrency"]["message"]}',
-            f'Interactive subscribers: {len(subscribers["interactive"])}',
-            f'Non-interactive subscribers: {len(subscribers["non_interactive"])}',
-            f'RAM cache path: {storage["ram_cache"]["path"]}',
-            f'Disk cache path: {storage["disk_cache"]["path"]}',
-            f'Shared bridge path: {storage["shared_bridge"]["path"]}',
-            f'GPG bridge path: {storage["gpg_bridge"]["path"]}',
-        ]
-        self._set_text(self.details_text, "\n".join(detail_lines))
 
-        flat_config = {
+        current_map = {
             "AUTHORIZED_USER": config["authorized_user"],
             "ITEM_ID": config["item_id"],
             "CACHE_GPG": config["cache_gpg"],
@@ -485,50 +484,55 @@ class ControlCenter:
             "DAEMON_TAG": config["logging"]["daemon_tag"],
             "LOG_TAG": config["logging"]["log_tag"],
         }
-        for key, value in flat_config.items():
-            if key in self.settings_vars:
-                self.settings_vars[key].set(value)
 
-        self._refresh_scheduled = False
-        self.root.after(POLL_MS, self.refresh)
+        for key, widget in self.settings_widgets.items():
+            value = current_map[key]
+            if isinstance(widget, Gtk.ComboBoxText):
+                widget.set_active(0 if value == "true" else 1)
+            elif isinstance(widget, Gtk.Entry):
+                widget.set_text(value)
+
+        self._refresh_inflight = False
+        return False
 
     def _storage_label(self, payload: dict) -> str:
         state = "Active" if payload["active"] else "Inactive"
         return f'{state} ({payload["path"]})'
 
-    def _update_badges(self, status: dict) -> None:
-        daemon = status["daemon"]
-        storage = status["storage"]
-        subscribers = status["subscribers"]
-        keys = status["keys"]
+    def _show_error(self, message: str) -> bool:
+        dialog = Gtk.MessageDialog(
+            transient_for=self,
+            flags=0,
+            message_type=Gtk.MessageType.ERROR,
+            buttons=Gtk.ButtonsType.CLOSE,
+            text="BW-ENV",
+        )
+        dialog.format_secondary_text(message)
+        dialog.run()
+        dialog.destroy()
+        return False
 
-        self._set_badge("daemon", daemon["label"], "#16a34a" if daemon["running"] and daemon["state"] != "PAUSED" else "#f59e0b")
-        self._set_badge("vault", "Unlocked" if status["vault"]["unlocked"] else "Locked", self.palette["green"] if status["vault"]["unlocked"] else self.palette["red"])
-        self._set_badge("ram", "Active" if storage["ram_cache"]["active"] else "Off", self.palette["green"] if storage["ram_cache"]["active"] else self.palette["red"])
-        self._set_badge("disk", "Encrypted" if storage["disk_cache"]["active"] else "Missing", self.palette["green"] if storage["disk_cache"]["active"] else self.palette["red"])
-        self._set_badge("shared", "Active" if storage["shared_bridge"]["active"] else "Off", self.palette["green"] if storage["shared_bridge"]["active"] else self.palette["gray"])
-        self._set_badge("gpg", "Active" if storage["gpg_bridge"]["active"] else "Off", self.palette["green"] if storage["gpg_bridge"]["active"] else self.palette["gray"])
-        self._set_badge("subscribers", str(len(subscribers["interactive"]) + len(subscribers["non_interactive"])), self.palette["blue"])
-        self._set_badge("keys", str(keys["count"]), self.palette["violet"] if keys["count"] else self.palette["gray"])
-
-    def _set_badge(self, key: str, text: str, color: str) -> None:
-        badge = self.badges[key]
-        badge.configure(text=text, bg=color, fg="white")
-
-    def _set_text(self, widget: tk.Text, value: str) -> None:
-        widget.configure(state="normal")
-        widget.delete("1.0", tk.END)
-        widget.insert("1.0", value)
-        widget.configure(state="disabled")
+    def _show_info(self, message: str) -> bool:
+        dialog = Gtk.MessageDialog(
+            transient_for=self,
+            flags=0,
+            message_type=Gtk.MessageType.INFO,
+            buttons=Gtk.ButtonsType.CLOSE,
+            text="BW-ENV",
+        )
+        dialog.format_secondary_text(message)
+        dialog.run()
+        dialog.destroy()
+        return False
 
     def run_action(self, command: str) -> None:
         def worker() -> None:
             try:
                 self.backend.action(command)
             except Exception as exc:  # noqa: BLE001
-                self.root.after(0, lambda: messagebox.showerror("BW-ENV", str(exc)))
+                GLib.idle_add(self._show_error, str(exc))
                 return
-            self.root.after(0, self.refresh)
+            GLib.idle_add(self.refresh)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -553,22 +557,25 @@ class ControlCenter:
                     "DAEMON_TAG": current["logging"]["daemon_tag"],
                     "LOG_TAG": current["logging"]["log_tag"],
                 }
-                for key, var in self.settings_vars.items():
-                    value = var.get().strip()
+
+                for key, widget in self.settings_widgets.items():
+                    if isinstance(widget, Gtk.ComboBoxText):
+                        value = widget.get_active_text() or ""
+                    else:
+                        value = widget.get_text().strip()
                     if value != current_map.get(key, ""):
                         self.backend.set_config(key, value)
             except Exception as exc:  # noqa: BLE001
-                self.root.after(0, lambda: messagebox.showerror("BW-ENV", str(exc)))
+                GLib.idle_add(self._show_error, str(exc))
                 return
 
-            self.root.after(0, lambda: messagebox.showinfo("BW-ENV", "Settings updated."))
-            self.root.after(0, self.refresh)
+            GLib.idle_add(self._show_info, "Settings updated.")
+            GLib.idle_add(self.refresh)
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def run(self) -> None:
-        self.root.mainloop()
-
 
 if __name__ == "__main__":
-    ControlCenter().run()
+    win = ControlCenter()
+    win.show_all()
+    Gtk.main()
