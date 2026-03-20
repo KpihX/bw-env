@@ -5,8 +5,6 @@
 # === BW-ENV Shell Integration ===
 [ -f "$HOME/Work/sh/bw-env/shell.sh" ] && source "$HOME/Work/sh/bw-env/shell.sh"
 
-PREPASS_ROOT=qi_DXjKgSAVFhWbK70-FV6ObZf9_N16lI6zjcg9bLgo
-
 # === Node Version Manager (idempotent — safe to source multiple times) ===
 if [ -z "$NVM_LOADED" ]; then
     export NVM_DIR="$HOME/.nvm"
