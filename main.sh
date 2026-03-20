@@ -49,6 +49,7 @@ Usage: bw-env [command] [options]
              Use 'bw-env config list', 'bw-env config list --json', 'bw-env config get KEY',
              or 'bw-env config set KEY VALUE'.
     gui      Control Center: Opens the graphical control center window.
+             Includes Overview, Subscribers, Settings, and Activity/Logs tabs.
     tray     Tray: Starts, stops, restarts, or opens the tray/control-center integration.
              Use 'bw-env tray start|stop|restart|open|install'.
     lock     Security: Immediately purges secrets from RAM and closes all bridges.

@@ -22,91 +22,127 @@ POLL_MS = 3000
 
 CSS = b"""
 window {
-  background: #0f141c;
-  color: #e6edf7;
+  background: #1f1f24;
+  color: #eceff4;
 }
 #root {
-  background: #0f141c;
+  background: #1f1f24;
 }
 #panel,
 #subpanel,
 #settings-frame {
-  background: #171d27;
-  border: 1px solid #303c4f;
-  border-radius: 12px;
+  background: #2a2b31;
+  border: 1px solid #454750;
+  border-radius: 14px;
+  box-shadow: inset 0 1px rgba(255,255,255,0.03);
 }
 #subpanel {
-  background: #1c2330;
+  background: #31333a;
 }
 headerbar {
-  background: #121923;
-  border-bottom: 1px solid #303c4f;
+  background: linear-gradient(to bottom, #2f3138, #2a2b31);
+  border-bottom: 1px solid #44464f;
+  min-height: 44px;
 }
 headerbar title {
-  color: #f8fafc;
+  color: #f5f6f8;
+  font-weight: 700;
 }
 button {
-  background: #212b3a;
-  color: #e6edf7;
-  border: 1px solid #3a475d;
+  background: linear-gradient(to bottom, #3a3d46, #33353d);
+  color: #edf1f7;
+  border: 1px solid #555864;
   border-radius: 10px;
   box-shadow: none;
+  padding: 8px 12px;
 }
 button:hover {
-  background: #2a3647;
+  background: linear-gradient(to bottom, #474b56, #3b3e47);
+}
+button:active {
+  background: #2e3138;
 }
 entry,
 combobox box,
 combobox button,
 textview,
 textview text {
-  background: #1b2431;
-  color: #e6edf7;
-  border-color: #344256;
+  background: #24262d;
+  color: #eceff4;
+  border-color: #4f525e;
 }
 notebook header tab {
-  background: #1c2431;
-  color: #9fb0c7;
+  background: #30323a;
+  color: #b6bcc8;
+  border: 1px solid #494c56;
+  border-bottom: none;
   border-radius: 10px 10px 0 0;
-  padding: 8px 14px;
+  padding: 9px 16px;
 }
 notebook header tab:checked {
-  background: #273244;
-  color: #f8fafc;
+  background: #3a3d46;
+  color: #f5f6f8;
 }
 .section-title {
   font-weight: 700;
-  color: #f8fafc;
+  color: #f5f6f8;
+}
+.section-subtitle {
+  color: #b0b6c0;
+  font-size: 0.95em;
 }
 .value-label {
-  color: #d8e1ee;
+  color: #d7dbe3;
 }
 .muted {
-  color: #97a6ba;
+  color: #a1a7b3;
 }
 .badge {
   border-radius: 999px;
   padding: 8px 14px;
   color: #f8fafc;
   font-weight: 700;
+  border: 1px solid rgba(255,255,255,0.08);
 }
 .badge-ok {
-  background: #1f9d69;
+  background: #3d7a5c;
 }
 .badge-warn {
-  background: #c8921b;
+  background: #8a6b34;
 }
 .badge-error {
-  background: #c65368;
+  background: #8d4855;
 }
 .badge-info {
-  background: #4f8cff;
+  background: #4d6787;
 }
 .badge-violet {
-  background: #8667f2;
+  background: #65558f;
 }
 .badge-muted {
-  background: #5f7087;
+  background: #545863;
+}
+scrolledwindow,
+viewport {
+  background: transparent;
+}
+scrollbar slider {
+  background: #5a5d67;
+  border-radius: 999px;
+  min-width: 8px;
+  min-height: 8px;
+}
+treeview,
+treeview.view {
+  background: #24262d;
+  color: #eceff4;
+  border-color: #4f525e;
+}
+treeview header button {
+  background: #30323a;
+  color: #dfe4ec;
+  border: 1px solid #494c56;
+  border-radius: 0;
 }
 """
 
@@ -134,6 +170,12 @@ class BwEnvBackend:
             raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "config list failed")
         return json.loads(result.stdout)
 
+    def logs(self, lines: int = 80) -> str:
+        result = self.run("logs", "-n", str(lines))
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "logs failed")
+        return result.stdout.strip()
+
     def set_config(self, key: str, value: str) -> None:
         result = self.run("config", "set", key, value)
         if result.returncode != 0:
@@ -158,6 +200,8 @@ class ControlCenter(Gtk.Window):
         self.badges: dict[str, Gtk.Label] = {}
         self.value_labels: dict[str, Gtk.Label] = {}
         self.settings_widgets: dict[str, Gtk.Widget] = {}
+        self.compact_mode = False
+        self.log_lines = 80
 
         self._install_css()
         self._build_ui()
@@ -183,6 +227,15 @@ class ControlCenter(Gtk.Window):
         header.set_show_close_button(True)
         header.set_title("BW-ENV")
         self.set_titlebar(header)
+
+        compact_switch = Gtk.Switch()
+        compact_switch.connect("notify::active", self._on_compact_toggled)
+        compact_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        compact_label = Gtk.Label(label="Compact")
+        compact_label.get_style_context().add_class("muted")
+        compact_box.pack_start(compact_label, False, False, 0)
+        compact_box.pack_start(compact_switch, False, False, 0)
+        header.pack_end(compact_box)
 
         actions = Gtk.Box(spacing=8)
         for label, command in [
@@ -210,6 +263,7 @@ class ControlCenter(Gtk.Window):
         notebook.append_page(self._build_overview_tab(), Gtk.Label(label="Overview"))
         notebook.append_page(self._build_subscribers_tab(), Gtk.Label(label="Subscribers"))
         notebook.append_page(self._build_settings_tab(), Gtk.Label(label="Settings"))
+        notebook.append_page(self._build_logs_tab(), Gtk.Label(label="Activity"))
 
     def _build_overview_tab(self) -> Gtk.Widget:
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
@@ -239,11 +293,13 @@ class ControlCenter(Gtk.Window):
         outer.pack_start(badges_frame, False, False, 0)
 
         top = Gtk.Paned.new(Gtk.Orientation.HORIZONTAL)
+        self.overview_top = top
         top.pack1(self._build_runtime_frame(), resize=True, shrink=False)
         top.pack2(self._build_storage_frame(), resize=True, shrink=False)
         outer.pack_start(top, False, False, 0)
 
         bottom = Gtk.Paned.new(Gtk.Orientation.HORIZONTAL)
+        self.overview_bottom = bottom
         bottom.pack1(self._build_text_frame("Secrets", "keys"), resize=True, shrink=False)
         bottom.pack2(self._build_text_frame("Status Details", "details"), resize=True, shrink=False)
         outer.pack_start(bottom, True, True, 0)
@@ -252,6 +308,7 @@ class ControlCenter(Gtk.Window):
 
     def _build_runtime_frame(self) -> Gtk.Widget:
         frame = self._frame("Runtime")
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         grid = Gtk.Grid(column_spacing=12, row_spacing=8)
         for row, key in enumerate(["daemon", "vault", "last_sync", "interval", "concurrency"]):
             label = Gtk.Label(label=self._pretty_key(key) + ":")
@@ -264,11 +321,17 @@ class ControlCenter(Gtk.Window):
             self.value_labels[key] = value
             grid.attach(label, 0, row, 1, 1)
             grid.attach(value, 1, row, 1, 1)
-        frame.add(grid)
+        subtitle = Gtk.Label(label="Live runtime and synchronization state")
+        subtitle.get_style_context().add_class("section-subtitle")
+        subtitle.set_xalign(0)
+        outer.pack_start(subtitle, False, False, 0)
+        outer.pack_start(grid, False, False, 0)
+        frame.add(outer)
         return frame
 
     def _build_storage_frame(self) -> Gtk.Widget:
         frame = self._frame("Storage & Bridges")
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         grid = Gtk.Grid(column_spacing=12, row_spacing=8)
         for row, key in enumerate(["ram_cache", "disk_cache", "shared_bridge", "gpg_bridge"]):
             label = Gtk.Label(label=self._pretty_key(key) + ":")
@@ -281,7 +344,12 @@ class ControlCenter(Gtk.Window):
             self.value_labels[key] = value
             grid.attach(label, 0, row, 1, 1)
             grid.attach(value, 1, row, 1, 1)
-        frame.add(grid)
+        subtitle = Gtk.Label(label="RAM cache, encrypted cache, and shared bridges")
+        subtitle.get_style_context().add_class("section-subtitle")
+        subtitle.set_xalign(0)
+        outer.pack_start(subtitle, False, False, 0)
+        outer.pack_start(grid, False, False, 0)
+        frame.add(outer)
         return frame
 
     def _build_text_frame(self, title: str, key: str) -> Gtk.Widget:
@@ -300,9 +368,52 @@ class ControlCenter(Gtk.Window):
 
     def _build_subscribers_tab(self) -> Gtk.Widget:
         paned = Gtk.Paned.new(Gtk.Orientation.HORIZONTAL)
-        paned.pack1(self._build_text_frame("Interactive Shells", "interactive"), resize=True, shrink=False)
-        paned.pack2(self._build_text_frame("Non-Interactive Processes", "non_interactive"), resize=True, shrink=False)
+        paned.pack1(self._build_interactive_tree_frame(), resize=True, shrink=False)
+        paned.pack2(self._build_non_interactive_tree_frame(), resize=True, shrink=False)
         return paned
+
+    def _build_interactive_tree_frame(self) -> Gtk.Widget:
+        frame = self._frame("Interactive Shells")
+        store = Gtk.ListStore(int)
+        self.interactive_store = store
+        tree = Gtk.TreeView(model=store)
+        tree.set_headers_visible(True)
+        renderer = Gtk.CellRendererText()
+        column = Gtk.TreeViewColumn("PID", renderer, text=0)
+        column.set_resizable(True)
+        tree.append_column(column)
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        scrolled.add(tree)
+        frame.add(scrolled)
+        return frame
+
+    def _build_non_interactive_tree_frame(self) -> Gtk.Widget:
+        frame = self._frame("Non-Interactive Processes")
+        store = Gtk.ListStore(int, str, str, str)
+        self.non_interactive_store = store
+        tree = Gtk.TreeView(model=store)
+        tree.set_headers_visible(True)
+        columns = [
+            ("PID", 0, 80),
+            ("TTY", 1, 90),
+            ("Comm", 2, 120),
+            ("Command", 3, 520),
+        ]
+        for title, index, width in columns:
+            renderer = Gtk.CellRendererText()
+            renderer.set_property("ellipsize", 3 if index == 3 else 0)
+            column = Gtk.TreeViewColumn(title, renderer, text=index)
+            column.set_resizable(True)
+            column.set_min_width(width)
+            if index == 3:
+                column.set_expand(True)
+            tree.append_column(column)
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        scrolled.add(tree)
+        frame.add(scrolled)
+        return frame
 
     def _build_settings_tab(self) -> Gtk.Widget:
         scrolled = Gtk.ScrolledWindow()
@@ -348,6 +459,38 @@ class ControlCenter(Gtk.Window):
 
         return scrolled
 
+    def _build_logs_tab(self) -> Gtk.Widget:
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+
+        controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        lines_label = Gtk.Label(label="Lines")
+        lines_label.get_style_context().add_class("muted")
+        self.log_spin = Gtk.SpinButton.new_with_range(20, 500, 10)
+        self.log_spin.set_value(self.log_lines)
+        self.log_spin.set_numeric(True)
+        self.log_spin.connect("value-changed", self._on_log_lines_changed)
+        refresh_logs = Gtk.Button(label="Refresh Logs")
+        refresh_logs.connect("clicked", lambda *_: self.refresh())
+        controls.pack_start(lines_label, False, False, 0)
+        controls.pack_start(self.log_spin, False, False, 0)
+        controls.pack_start(refresh_logs, False, False, 0)
+        outer.pack_start(controls, False, False, 0)
+
+        frame = self._frame("Daemon Activity", "subpanel")
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        textview = Gtk.TextView()
+        textview.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        textview.set_editable(False)
+        textview.set_cursor_visible(False)
+        textview.set_monospace(True)
+        self.logs_textview = textview
+        scrolled.add(textview)
+        frame.add(scrolled)
+        outer.pack_start(frame, True, True, 0)
+
+        return outer
+
     def _frame(self, title: str, name: str = "panel") -> Gtk.Frame:
         frame = Gtk.Frame(label=title)
         frame.set_name(name)
@@ -362,6 +505,14 @@ class ControlCenter(Gtk.Window):
     def _pretty_key(self, key: str) -> str:
         return key.replace("_", " ").title()
 
+    def _on_compact_toggled(self, switch: Gtk.Switch, _param: object) -> None:
+        self.compact_mode = switch.get_active()
+        self.overview_bottom.set_visible(not self.compact_mode)
+        self.overview_top.set_position(420 if self.compact_mode else 520)
+
+    def _on_log_lines_changed(self, spin: Gtk.SpinButton) -> None:
+        self.log_lines = spin.get_value_as_int()
+
     def _set_textview(self, name: str, text: str) -> None:
         textview: Gtk.TextView = getattr(self, f"{name}_textview")
         buffer_ = textview.get_buffer()
@@ -375,6 +526,11 @@ class ControlCenter(Gtk.Window):
             context.remove_class(candidate)
         context.add_class(css_class)
 
+    def _set_logs_text(self, text: str) -> None:
+        content = text or "No log lines available."
+        buffer_ = self.logs_textview.get_buffer()
+        buffer_.set_text(content)
+
     def refresh(self) -> bool:
         if self._refresh_inflight:
             return True
@@ -386,14 +542,15 @@ class ControlCenter(Gtk.Window):
         try:
             status = self.backend.status()
             config = self.backend.config()
+            logs = self.backend.logs(self.log_lines)
         except Exception as exc:  # noqa: BLE001
             GLib.idle_add(self._show_error, str(exc))
             self._refresh_inflight = False
             return
 
-        GLib.idle_add(self._apply_refresh, status, config)
+        GLib.idle_add(self._apply_refresh, status, config, logs)
 
-    def _apply_refresh(self, status: dict, config: dict) -> bool:
+    def _apply_refresh(self, status: dict, config: dict, logs: str) -> bool:
         daemon = status["daemon"]
         storage = status["storage"]
         keys = status["keys"]
@@ -437,16 +594,12 @@ class ControlCenter(Gtk.Window):
                 ]
             ),
         )
-        self._set_textview(
-            "interactive",
-            "\n".join(f"- PID {pid}" for pid in subscribers["interactive"]) or "No interactive subscribers.",
-        )
-        non_interactive_lines = []
+        self.interactive_store.clear()
+        for pid in subscribers["interactive"]:
+            self.interactive_store.append([pid])
+        self.non_interactive_store.clear()
         for proc in subscribers["non_interactive"]:
-            non_interactive_lines.append(
-                f'- PID {proc["pid"]} | TTY {proc["tty"]} | Comm {proc["comm"]}\n  Cmd: {proc["args"]}'
-            )
-        self._set_textview("non_interactive", "\n\n".join(non_interactive_lines) or "No non-interactive subscribers.")
+            self.non_interactive_store.append([proc["pid"], proc["tty"], proc["comm"], proc["args"]])
         self._set_textview(
             "details",
             "\n".join(
@@ -467,6 +620,7 @@ class ControlCenter(Gtk.Window):
                 ]
             ),
         )
+        self._set_logs_text(logs)
 
         current_map = {
             "AUTHORIZED_USER": config["authorized_user"],

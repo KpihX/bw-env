@@ -111,7 +111,7 @@ The tray is intentionally thin:
 
 - the icon color reflects the current state
 - the AppIndicator menu exposes direct actions (`unlock`, `sync`, `lock`, `pause`, `resume`, `start`, `stop`, `restart`)
-- the control center exposes the full status, subscriber lists, and relevant settings
+- the control center exposes the full status, subscriber lists, relevant settings, and a live Activity tab backed by `bw-env logs`
 
 Required graphical stack:
 
@@ -181,7 +181,7 @@ The system is 100% flexible. Key parameters include:
 | `bw-env status --json` | **Audit / API** | Structured machine-readable status for GUIs and local integrations. |
 | `bw-env config list` | **Settings** | Lists the relevant user-facing configuration surface. |
 | `bw-env config set KEY VALUE` | **Settings** | Updates one relevant runtime setting inside `.env`. |
-| `bw-env gui` | **GUI** | Opens the native GTK control center (Overview / Subscribers / Settings). |
+| `bw-env gui` | **GUI** | Opens the native GTK control center (Overview / Subscribers / Settings / Activity). |
 | `bw-env tray start` | **GUI / Tray** | Starts the persistent AppIndicator tray with direct menu actions. |
 | `bw-env tray open` | **GUI / Tray** | Opens the control center directly. |
 | `bw-env tray install` | **GUI / Tray** | Installs the tray user service and enables it automatically when the user systemd bus is reachable. |

@@ -8,6 +8,7 @@ This document chronicles the development of `bw-env`, a journey from a simple sc
 - **Config Control Surface**: Added `bw-env config list`, `bw-env config list --json`, `bw-env config get KEY`, and `bw-env config set KEY VALUE`.
 - **Shell Bootstrap Bundle**: Added `profile.sh` so `~/.kshrc` can source a single reusable bootstrap entrypoint.
 - **First Control Center**: Added a native GTK dark-themed control center and an AppIndicator tray integration with direct actions.
+- **Activity Surface**: Added an `Activity` tab to the GTK control center, backed directly by `bw-env logs` with adjustable line count and live refresh.
 - **Tray Lifecycle Command**: Added `bw-env tray install` to deploy and activate the user service automatically when possible.
 ### 🛠️ Operational Refinements
 - **Boot / Wake Policy Flags**: Added `AUTO_START_ON_BOOT` and `AUTO_START_ON_WAKE` to decouple daemon activation policy from the service lifecycle.
