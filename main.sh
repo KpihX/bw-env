@@ -52,6 +52,9 @@ Usage: bw-env [command] [options]
              Includes Overview, Subscribers, Settings, and Activity/Logs tabs.
     tray     Tray: Starts, stops, restarts, or opens the tray/control-center integration.
              Use 'bw-env tray start|stop|restart|open|install'.
+    unsubscribe
+             Registry: Removes a specific PID from the revocation subscriber registries.
+             Use 'bw-env unsubscribe <pid>' for targeted cleanup from CLI or GUI.
     lock     Security: Immediately purges secrets from RAM and closes all bridges.
              Triggers Global Revocation (SIGUSR2) to all active shells.
     purge    Nuclear: Destroys ALL traces (RAM, Disk, Bridges, Daemon) of secrets.
@@ -786,13 +789,27 @@ case "$1" in
             log_err "Daemon is not running."
         fi
         ;;
-    logs)        
-        shift
-        lines=20
-        [[ "$1" == "-n" ]] && { lines="$2"; shift 2; }
-        show_logs "$lines"
-        ;;
-      help|--help) show_help ;;
+      logs)        
+          shift
+          lines=20
+          [[ "$1" == "-n" ]] && { lines="$2"; shift 2; }
+          show_logs "$lines"
+          ;;
+      unsubscribe)
+          shift
+          target_pid="$1"
+          if [[ -z "$target_pid" || ! "$target_pid" =~ ^[0-9]+$ ]]; then
+              log_err "Usage: bw-env unsubscribe <pid>"
+              exit 1
+          fi
+          if remove_subscriber_pid "$target_pid"; then
+              log_info "Subscriber [PID $target_pid] removed from revocation registries."
+          else
+              log_err "Subscriber [PID $target_pid] not found in revocation registries."
+              exit 1
+          fi
+          ;;
+        help|--help) show_help ;;
       status)
           if [[ "$2" == "--json" ]]; then
               emit_status_json

@@ -26,6 +26,7 @@ This document chronicles the development of `bw-env`, a journey from a simple sc
 - **First Control Center**: Added a native GTK dark-themed control center and an AppIndicator tray integration with direct actions.
 - **Activity Surface**: Added an `Activity` tab to the GTK control center, backed directly by `bw-env logs` with adjustable line count and live refresh.
 - **Tray Lifecycle Command**: Added `bw-env tray install` to deploy and activate the user service automatically when possible.
+- **Targeted Subscriber Removal**: Added `bw-env unsubscribe <pid>` and matching per-row trash actions in the GTK subscriber lists.
 ### 🛠️ Operational Refinements
 - **Boot / Wake Policy Flags**: Added `AUTO_START_ON_BOOT` and `AUTO_START_ON_WAKE` to decouple daemon activation policy from the service lifecycle.
 - **Subscriber Audit Split**: `status` now distinguishes interactive shells from non-interactive processes with clearer indentation and process detail.

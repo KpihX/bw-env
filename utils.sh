@@ -182,6 +182,38 @@ remove_subscriber() {
     log_sys "Process [PID $$] unregistered (Exit)."
 }
 
+# remove_subscriber_pid: Removes the target PID from all registries.
+remove_subscriber_pid() {
+    local target_pid="$1"
+    local registry tmp_file found=1
+
+    [[ "$target_pid" =~ ^[0-9]+$ ]] || return 1
+
+    prune_subscribers
+    while read -r registry; do
+        [[ -f "$registry" ]] || continue
+        if ! grep -qx "$target_pid" "$registry" 2>/dev/null; then
+            continue
+        fi
+        found=0
+        tmp_file=$(mktemp "${registry}.tmp.XXXXXX") || continue
+        grep -vx "^${target_pid}\$" "$registry" > "$tmp_file" 2>/dev/null || true
+        if [[ -s "$tmp_file" ]]; then
+            chmod 600 "$tmp_file"
+            mv -f "$tmp_file" "$registry"
+        else
+            rm -f "$tmp_file" "$registry"
+        fi
+    done < <(subscriber_registry_files)
+
+    if [[ $found -eq 0 ]]; then
+        log_sys "Process [PID $target_pid] manually unsubscribed."
+        return 0
+    fi
+
+    return 1
+}
+
 # broadcast_purge: Sends SIGUSR2 to all registered process PIDs to trigger environment wiping.
 broadcast_purge() {
     local registry pid

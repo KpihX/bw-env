@@ -186,6 +186,11 @@ class BwEnvBackend:
         if result.returncode != 0:
             raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"{command} failed")
 
+    def unsubscribe_pid(self, pid: int) -> None:
+        result = self.run("unsubscribe", str(pid))
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"unsubscribe failed for PID {pid}")
+
 
 class ControlCenter(Gtk.Window):
     """Main GTK control-center window."""
@@ -374,14 +379,22 @@ class ControlCenter(Gtk.Window):
 
     def _build_interactive_tree_frame(self) -> Gtk.Widget:
         frame = self._frame("Interactive Shells")
-        store = Gtk.ListStore(int)
+        store = Gtk.ListStore(int, str)
         self.interactive_store = store
         tree = Gtk.TreeView(model=store)
+        self.interactive_tree = tree
         tree.set_headers_visible(True)
         renderer = Gtk.CellRendererText()
         column = Gtk.TreeViewColumn("PID", renderer, text=0)
         column.set_resizable(True)
         tree.append_column(column)
+        action_renderer = Gtk.CellRendererText()
+        action_renderer.set_property("xalign", 0.5)
+        action_column = Gtk.TreeViewColumn("", action_renderer, text=1)
+        action_column.set_sizing(Gtk.TreeViewColumnSizing.AUTOSIZE)
+        tree.append_column(action_column)
+        self.interactive_action_column = action_column
+        tree.connect("button-press-event", self._on_interactive_tree_click)
         scrolled = Gtk.ScrolledWindow()
         scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         scrolled.add(tree)
@@ -390,9 +403,10 @@ class ControlCenter(Gtk.Window):
 
     def _build_non_interactive_tree_frame(self) -> Gtk.Widget:
         frame = self._frame("Non-Interactive Processes")
-        store = Gtk.ListStore(int, str, str, str)
+        store = Gtk.ListStore(int, str, str, str, str)
         self.non_interactive_store = store
         tree = Gtk.TreeView(model=store)
+        self.non_interactive_tree = tree
         tree.set_headers_visible(True)
         columns = [
             ("PID", 0, 80),
@@ -409,6 +423,13 @@ class ControlCenter(Gtk.Window):
             if index == 3:
                 column.set_expand(True)
             tree.append_column(column)
+        action_renderer = Gtk.CellRendererText()
+        action_renderer.set_property("xalign", 0.5)
+        action_column = Gtk.TreeViewColumn("", action_renderer, text=4)
+        action_column.set_sizing(Gtk.TreeViewColumnSizing.AUTOSIZE)
+        tree.append_column(action_column)
+        self.non_interactive_action_column = action_column
+        tree.connect("button-press-event", self._on_non_interactive_tree_click)
         scrolled = Gtk.ScrolledWindow()
         scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         scrolled.add(tree)
@@ -531,6 +552,34 @@ class ControlCenter(Gtk.Window):
         buffer_ = self.logs_textview.get_buffer()
         buffer_.set_text(content)
 
+    def _on_interactive_tree_click(self, tree: Gtk.TreeView, event: Gdk.EventButton) -> bool:
+        if event.type != Gdk.EventType.BUTTON_PRESS or event.button != 1:
+            return False
+        hit = tree.get_path_at_pos(int(event.x), int(event.y))
+        if not hit:
+            return False
+        path, column, _cell_x, _cell_y = hit
+        if column != self.interactive_action_column:
+            return False
+        model = tree.get_model()
+        pid = model[path][0]
+        self.unsubscribe_pid(pid)
+        return True
+
+    def _on_non_interactive_tree_click(self, tree: Gtk.TreeView, event: Gdk.EventButton) -> bool:
+        if event.type != Gdk.EventType.BUTTON_PRESS or event.button != 1:
+            return False
+        hit = tree.get_path_at_pos(int(event.x), int(event.y))
+        if not hit:
+            return False
+        path, column, _cell_x, _cell_y = hit
+        if column != self.non_interactive_action_column:
+            return False
+        model = tree.get_model()
+        pid = model[path][0]
+        self.unsubscribe_pid(pid)
+        return True
+
     def refresh(self) -> bool:
         if self._refresh_inflight:
             return True
@@ -596,10 +645,10 @@ class ControlCenter(Gtk.Window):
         )
         self.interactive_store.clear()
         for pid in subscribers["interactive"]:
-            self.interactive_store.append([pid])
+            self.interactive_store.append([pid, "🗑"])
         self.non_interactive_store.clear()
         for proc in subscribers["non_interactive"]:
-            self.non_interactive_store.append([proc["pid"], proc["tty"], proc["comm"], proc["args"]])
+            self.non_interactive_store.append([proc["pid"], proc["tty"], proc["comm"], proc["args"], "🗑"])
         self._set_textview(
             "details",
             "\n".join(
@@ -684,6 +733,17 @@ class ControlCenter(Gtk.Window):
         def worker() -> None:
             try:
                 self.backend.action(command)
+            except Exception as exc:  # noqa: BLE001
+                GLib.idle_add(self._show_error, str(exc))
+                return
+            GLib.idle_add(self.refresh)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def unsubscribe_pid(self, pid: int) -> None:
+        def worker() -> None:
+            try:
+                self.backend.unsubscribe_pid(pid)
             except Exception as exc:  # noqa: BLE001
                 GLib.idle_add(self._show_error, str(exc))
                 return

@@ -192,10 +192,11 @@ The system is 100% flexible. Key parameters include:
 | `bw-env status --json` | **Audit / API** | Structured machine-readable status for GUIs and local integrations. |
 | `bw-env config list` | **Settings** | Lists the relevant user-facing configuration surface. |
 | `bw-env config set KEY VALUE` | **Settings** | Updates one relevant runtime setting inside `.env`. |
-| `bw-env gui` | **GUI** | Opens the native GTK control center (Overview / Subscribers / Settings / Activity). |
+| `bw-env gui` | **GUI** | Opens the native GTK control center (Overview / Subscribers / Settings / Activity) with per-subscriber unsubscribe actions. |
 | `bw-env tray start` | **GUI / Tray** | Starts the persistent AppIndicator tray with direct menu actions. |
 | `bw-env tray open` | **GUI / Tray** | Opens the control center directly. |
 | `bw-env tray install` | **GUI / Tray** | Installs the tray user service and enables it automatically when the user systemd bus is reachable. |
+| `bw-env unsubscribe <pid>` | **Admin / Subscribers** | Removes one PID from the revocation registries without stopping the process. |
 | `bw-env lock` | **Security** | Purges RAM, closes bridges, and triggers **Global Revocation**. |
 | `bw-env purge` | **Nuclear** | **Total Destruction**: Stops daemon, wipes RAM/Disk, and revokes all shells. |
 | `bw-env decrypt`| **Offline** | Restores environment from encrypted disk cache (No network required). |
