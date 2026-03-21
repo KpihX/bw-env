@@ -4,6 +4,17 @@
 
 ---
 
+## 📁 Project Standards Snapshot
+
+This repository follows a strict local-kernel convention for documentation and agent behavior.
+
+### Core Project Documents
+- `README.md`: architecture, setup, operations.
+- `CHANGELOG.md`: released and historical changes.
+- `TODO.md`: pending backlog only (open work), intentionally separated from delivered work.
+
+---
+
 ## 🏗️ 1. Directive-Sequential Architecture
 
 The system is built on a strict separation of powers to ensure 100% reliability and predictability:

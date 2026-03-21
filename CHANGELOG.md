@@ -2,6 +2,13 @@
 
 This document chronicles the development of `bw-env`, a journey from a simple script to a production-grade, zero-trust infrastructure. It highlights the failures, regressions, and breakthroughs that shaped the final architecture.
 
+## [v1.2.2] - 2026-03-21 (The "README Standards Sync" Update)
+### 🛠️ Documentation
+- Updated `README.md` with a project standards snapshot.
+- Documented the `TODO.md` backlog role (pending work only) vs. `CHANGELOG.md` release history.
+- Documented local agent-kernel layout (`.agent/AGENT.md` + root symlink entrypoints).
+- Documented VIBE local mode (`.vibe/config.toml` + `.vibe/prompts/local.md` pointing to local kernel).
+
 ## [v1.2.1] - 2026-03-21 (The "Standards Alignment" Update)
 ### 🚀 Additions
 - Added project-local `.agent/AGENT.md` bootstrap from the global kernel.
