@@ -230,6 +230,18 @@ broadcast_purge() {
     done < <(subscriber_registry_files)
 }
 
+# broadcast_inject: Sends SIGUSR1 to all registered interactive subscribers to trigger env refresh.
+# Only targets interactive shells — non-interactive processes (MCPs, scripts) cannot re-source their env.
+broadcast_inject() {
+    local pid
+    prune_subscriber_registry "$SUBS_REGISTRY_INTERACTIVE"
+    [[ -f "$SUBS_REGISTRY_INTERACTIVE" ]] || return 0
+    log_sys "Broadcasting environment refresh signal (SIGUSR1) to interactive subscribers..."
+    while read -r pid; do
+        kill -0 "$pid" 2>/dev/null && kill -SIGUSR1 "$pid" 2>/dev/null
+    done < "$SUBS_REGISTRY_INTERACTIVE"
+}
+
 # clear_session: Securely wipes the session key and GPG key from the RAM bridge.
 clear_session() {
     # 1. Wipe Bitwarden session bridge.

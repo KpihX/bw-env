@@ -20,8 +20,17 @@ bw-env() {
             source "$_dir/utils.sh"
             source "$_dir/.env"
             if [[ -f "$TEMP_ENV" ]]; then
+                # Wipe stale keys (removed from vault since last injection) before re-sourcing.
+                if [[ -f "$KEYS_REGISTRY" ]]; then
+                    while read -r _key; do
+                        [[ -n "$_key" ]] && unset "$_key"
+                    done < "$KEYS_REGISTRY"
+                fi
                 source "$TEMP_ENV"
                 register_subscriber
+                # Trap SIGUSR1: auto-refresh when a sync broadcasts from another shell/daemon.
+                # Falls back to manual 'bw-env get' if broadcast was missed.
+                trap '_bw_d="$HOME/Work/sh/bw-env"; source "$_bw_d/utils.sh" 2>/dev/null; source "$_bw_d/.env" 2>/dev/null; [[ -f "$KEYS_REGISTRY" ]] && while read -r _k; do [[ -n "$_k" ]] && unset "$_k"; done < "$KEYS_REGISTRY"; [[ -f "$TEMP_ENV" ]] && { source "$TEMP_ENV"; echo "🔄 [bw-env] Shell [$$] secrets refreshed."; }' SIGUSR1
                 echo "✅ [bw-env] Shell [$$] secrets injected and registered."
             else
                 echo "⚠️  [bw-env] No secrets in RAM. Run 'bw-env unlock' first."
@@ -39,6 +48,13 @@ bw-env() {
             if type remove_subscriber &>/dev/null; then
                 remove_subscriber
             fi
+            # Unset BW_ENV_LOADED entirely (removes both value and export flag).
+            # Without this, subprocesses spawned after drop (e.g. zsh -l -c used by
+            # tools like tick-admin) inherit BW_ENV_LOADED=1, which triggers the
+            # idempotency guard in shell.sh and prevents load.sh from sourcing TEMP_ENV.
+            # drop intentionally leaves TEMP_ENV intact — fresh login shells must
+            # still be able to read secrets from it.
+            unset BW_ENV_LOADED
             ;;
         *)
             # Delegate all other subcommands to main.sh (runs in a subprocess).
