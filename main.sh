@@ -54,60 +54,60 @@ Usage: bw-env [command] [options]
              Use 'bw-env tray start|stop|restart|open|install'.
     lock     Security: Immediately purges secrets from RAM and closes all bridges.
              Triggers Global Revocation (SIGUSR2) to all active shells.
-  purge    Nuclear: Destroys ALL traces (RAM, Disk, Bridges, Daemon) of secrets.
-  decrypt  Cold Start: Restores the environment to RAM from the encrypted disk backup.
-    status   Audit: Displays current visibility of secrets, bridges, and lock state.
-             Use '--json' for machine-readable output (GUI / integrations).
-  logs     Journal: Displays the last N log entries (default: 20). Use '-n X'.
-  restart  Daemon: Restarts the background synchronization service.
-  start    Daemon: Starts the background synchronization service.
-  stop     Daemon: Stops the background synchronization service.
-  pause    Daemon: Puts the daemon into PAUSED state (silent mode).
-  resume   Daemon: Wakes up the daemon from PAUSED state.
-  help     Manual: Displays this detailed help message.
+    purge    Nuclear: Destroys ALL traces (RAM, Disk, Bridges, Daemon) of secrets.
+    decrypt  Cold Start: Restores the environment to RAM from the encrypted disk backup.
+        status   Audit: Displays current visibility of secrets, bridges, and lock state.
+                Use '--json' for machine-readable output (GUI / integrations).
+    logs     Journal: Displays the last N log entries (default: 20). Use '-n X'.
+    restart  Daemon: Restarts the background synchronization service.
+    start    Daemon: Starts the background synchronization service.
+    stop     Daemon: Stops the background synchronization service.
+    pause    Daemon: Puts the daemon into PAUSED state (silent mode).
+    resume   Daemon: Wakes up the daemon from PAUSED state.
+    help     Manual: Displays this detailed help message.
 
-SHELL-SIDE COMMANDS (must run via the bw-env shell function, not as a subprocess):
-  get      Subscribe: Injects secrets into the current terminal and registers it as a
-           subscriber. Use when the vault was locked at shell startup.
-  drop     Unsubscribe: Wipes secrets from the current terminal and removes it from
-           the subscriber list (does not affect other shells or the global vault).
+    SHELL-SIDE COMMANDS (must run via the bw-env shell function, not as a subprocess):
+    get      Subscribe: Injects secrets into the current terminal and registers it as a
+            subscriber. Use when the vault was locked at shell startup.
+    drop     Unsubscribe: Wipes secrets from the current terminal and removes it from
+            the subscriber list (does not affect other shells or the global vault).
 
-SYSTEMD DAEMON (Background Sync & Auto-Lock):
-  Status:  systemctl --user status bw-env-sync.service
-  Logs:    journalctl -f --user-unit bw-env-sync.service
-  Restart: systemctl --user restart bw-env-sync.service (or 'bw-env restart')
-  Note:    If the daemon's prompt is cancelled or fails 3 times, it enters a PAUSED state.
-           It automatically resumes upon a manual 'unlock' or system wake/reboot.
+    SYSTEMD DAEMON (Background Sync & Auto-Lock):
+    Status:  systemctl --user status bw-env-sync.service
+    Logs:    journalctl -f --user-unit bw-env-sync.service
+    Restart: systemctl --user restart bw-env-sync.service (or 'bw-env restart')
+    Note:    If the daemon's prompt is cancelled or fails 3 times, it enters a PAUSED state.
+            It automatically resumes upon a manual 'unlock' or system wake/reboot.
 
-DIAGNOSTICS & DEBUGGING:
-  Action          System Command (Long)                bw-env Command (Fast)
-  ------          ---------------------                ---------------------
-  Check Status    systemctl --user status ...          bw-env status
-  View Logs       journalctl -t bw-env ...             bw-env logs [-n X]
-  Restart Daemon  systemctl --user restart ...         bw-env restart
-  Pause Daemon    kill -SIGUSR2 [PID]                  bw-env pause
-  Resume Daemon   kill -SIGUSR1 [PID]                  bw-env resume
-  Trace Code      bash -x main.sh [command]            (Debug mode)
-  Vault Health    bw status                            (Bitwarden CLI)
+    DIAGNOSTICS & DEBUGGING:
+    Action          System Command (Long)                bw-env Command (Fast)
+    ------          ---------------------                ---------------------
+    Check Status    systemctl --user status ...          bw-env status
+    View Logs       journalctl -t bw-env ...             bw-env logs [-n X]
+    Restart Daemon  systemctl --user restart ...         bw-env restart
+    Pause Daemon    kill -SIGUSR2 [PID]                  bw-env pause
+    Resume Daemon   kill -SIGUSR1 [PID]                  bw-env resume
+    Trace Code      bash -x main.sh [command]            (Debug mode)
+    Vault Health    bw status                            (Bitwarden CLI)
 
-CORE PRINCIPLES & GUARANTEES:
-  1. Zero-Disk Plaintext: Secrets reside ONLY in /dev/shm (RAM) with 600 permissions.
-  2. Atomic Updates: RAM cache updates use 'Atomic Swap' (mv) to prevent partial reads.
-  3. Strong Crypto: Local backup is AES-encrypted via PBKDF2 (100,000 iterations).
-  4. Auto-Lockdown: Instant RAM purge on System Sleep or Screen Lock (via D-Bus).
-  5. Global Revocation: SIGUSR2 broadcast to all shells for immediate memory wipe.
-  6. Concurrency: Atomic locking with PID transparency and post-release notification.
-  7. Anti-Spam: Intelligent notifications triggered only on actual state changes.
-  8. Resilience: Authoritative lock breaking on system wake-up events.
+    CORE PRINCIPLES & GUARANTEES:
+    1. Zero-Disk Plaintext: Secrets reside ONLY in /dev/shm (RAM) with 600 permissions.
+    2. Atomic Updates: RAM cache updates use 'Atomic Swap' (mv) to prevent partial reads.
+    3. Strong Crypto: Local backup is AES-encrypted via PBKDF2 (100,000 iterations).
+    4. Auto-Lockdown: Instant RAM purge on System Sleep or Screen Lock (via D-Bus).
+    5. Global Revocation: SIGUSR2 broadcast to all shells for immediate memory wipe.
+    6. Concurrency: Atomic locking with PID transparency and post-release notification.
+    7. Anti-Spam: Intelligent notifications triggered only on actual state changes.
+    8. Resilience: Authoritative lock breaking on system wake-up events.
 
-EXIT CODES:
-  0  SUCCESS: Operation completed successfully.
-  1  CONFIG/DEP ERROR: Missing .env, utils.sh, or mandatory tools (jq, bw, gpg, openssl).
-  2  USER CANCEL: User intentionally skipped or closed the password prompt.
-  3  AUTH ERROR: Bitwarden Master Password verification failed.
-  4  RETRIEVAL ERROR: Could not fetch item data or item is empty (prevents cache corruption).
-  5  CRYPTO ERROR: GPG Encryption/Decryption or PBKDF2 key derivation failed.
-  6  MAX ATTEMPTS: Maximum authentication attempts reached (prevents infinite loops).
+    EXIT CODES:
+    0  SUCCESS: Operation completed successfully.
+    1  CONFIG/DEP ERROR: Missing .env, utils.sh, or mandatory tools (jq, bw, gpg, openssl).
+    2  USER CANCEL: User intentionally skipped or closed the password prompt.
+    3  AUTH ERROR: Bitwarden Master Password verification failed.
+    4  RETRIEVAL ERROR: Could not fetch item data or item is empty (prevents cache corruption).
+    5  CRYPTO ERROR: GPG Encryption/Decryption or PBKDF2 key derivation failed.
+    6  MAX ATTEMPTS: Maximum authentication attempts reached (prevents infinite loops).
 EOF
 }
 

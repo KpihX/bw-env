@@ -1,4 +1,10 @@
+.agent/
+.vibe/
+AGENTS.md
+CLAUDE.md
 GEMINI.md
+COPILOT.md
+VIBE.md
 MEMORY.md
 .env
 *.tmp

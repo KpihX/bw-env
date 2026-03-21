@@ -2,6 +2,15 @@
 
 This document chronicles the development of `bw-env`, a journey from a simple script to a production-grade, zero-trust infrastructure. It highlights the failures, regressions, and breakthroughs that shaped the final architecture.
 
+## [v1.2.1] - 2026-03-21 (The "Standards Alignment" Update)
+### 🚀 Additions
+- Added project-local `.agent/AGENT.md` bootstrap from the global kernel.
+- Added agent symlinks: `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `COPILOT.md`, `VIBE.md`.
+### 🛠️ Documentation & Hygiene
+- Migrated `IDEAS.md` to `TODO.md` with a concise pending-only backlog format.
+- Removed already delivered roadmap items from the active todo surface.
+- Standardized `.gitignore` to include `.agent/` and all local agent markdown symlink names.
+
 ## [v1.2.0] - 2026-03-20 (The "Control Surface" Release)
 ### 🚀 Additions
 - **GUI-Ready Status API**: Added `bw-env status --json` as the structured state surface for the future tray/control-center.
