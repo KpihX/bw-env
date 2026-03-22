@@ -10,6 +10,7 @@ This file tracks only pending work. Delivered features are kept in `CHANGELOG.md
 
 ## P1 - Architecture & Daemon Intelligence
 
+- [ ] bw-mcp HTTP transport: once bw-mcp ships streamable-HTTP mode (homelab Traefik deployment), update `bw-env` shell helpers to optionally route secret requests through the HTTP endpoint — enabling remote agent contexts that cannot spawn local subprocesses.
 - [ ] Add multi-item aggregation (`GLOBAL_VARS` + project overlays) with deterministic merge order.
 - [ ] Add self-healing recovery for corrupted bridge files without full daemon restart.
 - [ ] Add adaptive sync cadence based on device state (battery/network/activity).
