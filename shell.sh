@@ -48,10 +48,8 @@ bw-env() {
             if type remove_subscriber &>/dev/null; then
                 remove_subscriber
             fi
-            # Unset BW_ENV_LOADED entirely (removes both value and export flag).
-            # Without this, subprocesses spawned after drop (e.g. zsh -l -c used by
-            # tools like tick-admin) inherit BW_ENV_LOADED=1, which triggers the
-            # idempotency guard in shell.sh and prevents load.sh from sourcing TEMP_ENV.
+            # Unset BW_ENV_LOADED (PID-scoped guard) so that sourcing ~/.kshrc
+            # again in this shell (e.g. after 'bw-env get') will re-run load.sh.
             # drop intentionally leaves TEMP_ENV intact — fresh login shells must
             # still be able to read secrets from it.
             unset BW_ENV_LOADED
@@ -98,9 +96,19 @@ bw-env() {
     esac
 }
 
-# Load secrets at shell startup (idempotent — guard prevents double message when
-# .zprofile and .zshrc both source .kshrc in the same login+interactive shell).
-if [[ -z "$BW_ENV_LOADED" ]]; then
+# Load secrets at shell startup.
+# Guard: PID-scoped idempotency — prevents double sourcing WITHIN the same shell
+# process (e.g. when .zprofile and .zshrc both source .kshrc in a login+interactive
+# shell), while ensuring every new child process sources secrets independently.
+#
+# Why PID and not a fixed value (=1):
+#   A fixed exported value is inherited by all descendants, permanently blocking
+#   load.sh in any subprocess spawned by an existing session (MCP zsh -l -c,
+#   new terminal tabs, tool scripts…). With the PID, an inherited value always
+#   differs from the child's own $$, so the guard is transparent to children.
+#
+# BW_ENV_LOADED is NOT exported — belt-and-suspenders on top of the PID check.
+if [[ -z "$BW_ENV_LOADED" ]] || [[ "$BW_ENV_LOADED" != "$$" ]]; then
     [[ -f "$HOME/Work/sh/bw-env/load.sh" ]] && source "$HOME/Work/sh/bw-env/load.sh"
-    export BW_ENV_LOADED=1
+    BW_ENV_LOADED=$$
 fi
