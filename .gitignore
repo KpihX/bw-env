@@ -1,15 +1,14 @@
-.agent/
-.vibe/
+# === Agent context (never commit) ===
+.agents/
 AGENTS.md
-CLAUDE.md
-GEMINI.md
-COPILOT.md
-VIBE.md
-MEMORY.md
+
+# === Secrets & runtime state ===
 .env
 *.tmp
 *.lock
 *.state
 *.lastsync
+
+# === Python cache ===
 __pycache__/
 *.pyc

@@ -242,7 +242,9 @@ emit_status_json() {
     local gpg_bridge_active=false
     [[ -f "$TEMP_ENV" ]] && ram_cache_active=true
     [[ -f "$CACHE_GPG" ]] && disk_cache_active=true
-    bw status 2>/dev/null | grep -q '"status":"unlocked"' && vault_unlocked=true
+    # Vault unlocked = secrets are in RAM and a session bridge is active.
+    # Do NOT call `bw status` here (spawns Node.js on every tray poll = resource leak).
+    [[ -f "$TEMP_ENV" ]] && [[ -f "$SESSION_FILE" ]] && vault_unlocked=true
     [[ -f "$SESSION_FILE" ]] && shared_bridge_active=true
     [[ -f "$GPG_BRIDGE_FILE" ]] && gpg_bridge_active=true
 
@@ -404,7 +406,8 @@ function unlock_unified() {
     # --- 4.1. Idempotency Check ---
     # If 'unlock' is requested but environment is already active, skip to avoid redundant prompts.
     # CRITICAL: 'sync' must ALWAYS proceed to refresh the environment and register the shell.
-    if [[ "$COMMAND" == "unlock" ]] && [[ -f "$TEMP_ENV" ]] && bw status 2>/dev/null | grep -q '"status":"unlocked"'; then
+    # Idempotency: secrets already in RAM + live session bridge = nothing to do.
+    if [[ "$COMMAND" == "unlock" ]] && [[ -f "$TEMP_ENV" ]] && [[ -f "$SESSION_FILE" ]]; then
         log_info "Environment is already active. Use 'sync' to force an update."
         [[ "$run_mode" != "--daemon" ]] && notify_daemon "SIGUSR1" "Resume Sync"
         return 0
@@ -463,6 +466,20 @@ function unlock_unified() {
         fi
 
         log_info "Verifying credentials with Bitwarden server (Attempt $attempts/$max_attempts)..."
+
+        # Guard: bw unlock --raw fails silently when not logged in, producing a
+        # misleading "Incorrect Master Password" error. Detect and surface clearly.
+        local bw_state
+        bw_state=$(bw status 2>/dev/null | grep -o '"status":"[^"]*"' | cut -d'"' -f4)
+        if [[ "$bw_state" == "unauthenticated" ]]; then
+            log_err "Bitwarden CLI is not logged in. Run in your terminal:"
+            log_err "  bw config server <your-vaultwarden-url>"
+            log_err "  bw login"
+            log_err "Then retry bw-env unlock."
+            release_lock
+            exit "$EXIT_AUTH_ERR"
+        fi
+
         SESSION_KEY=$(bw unlock --raw <<< "$MASTER_PASS")
         if [[ $? -eq 0 ]]; then
             save_session "$SESSION_KEY"
@@ -544,7 +561,8 @@ function unlock_unified() {
 function lock_vault() {
     local run_mode="$1"
     # --- 5.1. Idempotency Check ---
-    if [[ ! -f "$TEMP_ENV" ]] && [[ ! -f "$SESSION_FILE" ]] && ! bw status 2>/dev/null | grep -q '"status":"unlocked"'; then
+    # Idempotency: already locked if both RAM cache and session bridge are gone.
+    if [[ ! -f "$TEMP_ENV" ]] && [[ ! -f "$SESSION_FILE" ]]; then
         log_info "Environment is already locked."
         # SECURITY: Even if already locked, ensure the daemon is paused if called manually.
         [[ "$run_mode" != "--daemon" ]] && notify_daemon "SIGUSR2" "Pause Sync"
@@ -836,7 +854,7 @@ case "$1" in
         echo "Last Sync:      $last_sync"
         [[ -f "$TEMP_ENV" ]] && echo "RAM Cache:      ✅ ACTIVE ($TEMP_ENV)" || echo "RAM Cache:      ❌ LOCKED"
         [[ -f "$CACHE_GPG" ]] && echo "Disk Cache: ✅ ENCRYPTED ($CACHE_GPG)" || echo "Disk Cache: ❌ MISSING"
-        bw status 2>/dev/null | grep -q '"status":"unlocked"' && echo "Bitwarden:      ✅ UNLOCKED" || echo "Bitwarden:      ❌ LOCKED"
+        [[ -f "$SESSION_FILE" ]] && echo "Bitwarden:      ✅ SESSION ACTIVE (RAM bridge)" || echo "Bitwarden:      ❌ NO SESSION"
         [[ -f "$SESSION_FILE" ]] && echo "Shared Bridge:  ✅ ACTIVE (RAM)" || echo "Shared Bridge:  ❌ CLOSED"
         [[ -f "$GPG_BRIDGE_FILE" ]] && echo "GPG Bridge:     ✅ ACTIVE (RAM)" || echo "GPG Bridge:     ❌ CLOSED"
         if [[ -z "$LOCK_FILE" ]]; then

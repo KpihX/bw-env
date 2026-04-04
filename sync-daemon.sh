@@ -172,9 +172,13 @@ function start_dbus_monitor() {
     log_sys "Starting D-Bus monitor..."
     
     # Launch dbus-monitor in the background and read its output line by line.
+    # Note: --system BecomeMonitor is denied for user services; dbus-monitor falls back
+    # to eavesdropping which delivers identical signals. Redirect stderr to suppress the
+    # cosmetic AccessDenied startup message.
     exec {DBUS_FD}< <(dbus-monitor --system \
         "type='signal',interface='org.freedesktop.login1.Manager',member='PrepareForSleep'" \
-        "type='signal',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged',arg0='org.freedesktop.login1.Session'")
+        "type='signal',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged',arg0='org.freedesktop.login1.Session'" \
+        2>/dev/null)
     
     (
         local current_signal=""

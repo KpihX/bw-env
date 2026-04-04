@@ -5,20 +5,38 @@
 BRANCH := $(shell git rev-parse --abbrev-ref HEAD)
 SHELL_SCRIPTS := shell.sh load.sh main.sh sync-daemon.sh utils.sh profile.sh
 
-.PHONY: help push push-tags check lint log status
+.PHONY: help push push-tags check lint log status install purge
 
 # Default target
 help:
 	@echo ""
 	@echo "bw-env — available targets:"
 	@echo ""
-	@echo "  push        Push current branch ($(BRANCH)) to github + gitlab"
+	@echo "  install     Install bw-env on this machine (interactive)
+  install-y   Install bw-env with all defaults (-y flag)
+  purge       Uninstall bw-env from this machine (interactive)
+  purge-y     Uninstall bw-env silently (-y flag)
+  push        Push current branch ($(BRANCH)) to github + gitlab"
 	@echo "  push-tags   Push all tags to github + gitlab (triggers CI releases)"
 	@echo "  check       Bash syntax check (bash -n) on all .sh files"
 	@echo "  lint        Shellcheck lint (requires: apt install shellcheck)"
 	@echo "  log         Show recent git log (last 10 commits)"
 	@echo "  status      Show git status + diff summary"
 	@echo ""
+
+# ─── Install / Uninstall ──────────────────────────────────────────────────────
+
+install:
+	bash install.sh
+
+install-y:
+	bash install.sh -y
+
+purge:
+	bash purge.sh
+
+purge-y:
+	bash purge.sh -y
 
 # ─── Git ───────────────────────────────────────────────────────────────────────
 

@@ -27,11 +27,14 @@ TRAY_PID_FILE = Path(f"/dev/shm/bw-env-tray-{Path.home().name}.pid")
 
 class Backend:
     def run(self, *args: str) -> subprocess.CompletedProcess[str]:
+        # timeout=10: prevents hanging bw-env calls from accumulating when the
+        # vault server is temporarily unreachable (was causing 6h+ CPU leaks).
         return subprocess.run(
             ["bash", str(MAIN_SH), *args],
             capture_output=True,
             text=True,
             check=False,
+            timeout=10,
         )
 
     def status(self) -> dict:
@@ -86,7 +89,9 @@ class TrayApp:
         self.indicator.set_menu(self.menu)
         self._write_pid()
         self.refresh()
-        GLib.timeout_add_seconds(5, self.refresh)
+        # 30s interval: each poll spawns bash + Node.js (bw status). 5s was
+        # causing ~720 Node processes/hour and multi-GB RAM leak over time.
+        GLib.timeout_add_seconds(30, self.refresh)
         signal.signal(signal.SIGTERM, self._handle_quit_signal)
         signal.signal(signal.SIGINT, self._handle_quit_signal)
 
@@ -119,6 +124,10 @@ class TrayApp:
     def refresh(self) -> bool:
         try:
             status = self.backend.status()
+        except subprocess.TimeoutExpired:
+            self.status_item.set_label("BW-ENV: status timeout (vault unreachable?)")
+            self.indicator.set_icon_full("dialog-warning", "BW-ENV timeout")
+            return True
         except Exception as exc:  # noqa: BLE001
             self.status_item.set_label(f"BW-ENV error: {exc}")
             self.indicator.set_icon_full("dialog-error", "BW-ENV error")

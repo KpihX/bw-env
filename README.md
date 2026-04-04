@@ -6,12 +6,13 @@
 
 ## 📁 Project Standards Snapshot
 
-This repository follows a strict local-kernel convention for documentation and agent behavior.
+This repository follows the KπX `.agents/` standard for agent context.
 
 ### Core Project Documents
 - `README.md`: architecture, setup, operations.
 - `CHANGELOG.md`: released and historical changes.
 - `TODO.md`: pending backlog only (open work), intentionally separated from delivered work.
+- `.agents/AGENTS.md`: project-level agent context (git-ignored). Root `AGENTS.md` is a symlink to it.
 
 ---
 
@@ -231,8 +232,52 @@ BW-ENV uses **Journald** for maximum transparency.
 ### Service & Sync Health
 - **Systemd Status**: `systemctl --user status bw-env-sync.service`.
 - **Tray Status**: `ps -fp "$(cat /dev/shm/bw-env-tray-$USER.pid 2>/dev/null)"`.
-- **Bitwarden Status**: `bw status`.
+- **Bitwarden CLI Status**: `bw status`.
 - **Trace Execution**: `bash -x ~/Work/sh/bw-env/main.sh [command]`.
+
+### 🔴 Recovery Runbook
+
+#### "Authentication failed: Incorrect Master Password" (but password is correct)
+
+The `bw` CLI maintains its own session separately from the Bitwarden desktop app.
+If the bw CLI session is lost (restart, RAM wipe, first install), re-authenticate:
+
+```bash
+# 1. Point the CLI to your self-hosted Vaultwarden (only needed once)
+bw config server https://your-vaultwarden-url
+
+# 2. Log in with your Bitwarden credentials
+bw login
+
+# 3. Unlock bw-env as normal
+bw-env unlock
+```
+
+> **Why this happens:** `bw-env unlock` calls `bw unlock --raw`, which requires
+> the bw CLI to already have a logged-in user with local vault data cached.
+> The desktop app and the CLI are independent processes with separate sessions.
+
+#### Cold-start recovery (offline / no live Bitwarden connection)
+
+If you have an encrypted local backup (`~/.bw/env/cache.env.gpg`) and the vault
+is temporarily unreachable, restore secrets from the local cache without a network:
+
+```bash
+bw-env decrypt
+```
+
+This re-derives the GPG key from your master password and restores `TEMP_ENV`
+into RAM. Note: the daemon will stay in PAUSED state until a live `bw login` + `bw-env unlock` is done.
+
+#### Tray icon stuck red after session recovery
+
+The tray polls every 30s. A stuck red state after a bw-env recovery is resolved by restarting:
+
+```bash
+bw-env tray restart
+# or
+systemctl --user restart bw-env-tray.service
+```
 
 ---
 
