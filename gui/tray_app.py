@@ -116,10 +116,18 @@ class TrayApp:
         def worker() -> None:
             try:
                 self.backend.action(command)
-            finally:
-                GLib.idle_add(self.refresh)
+            except Exception as exc:  # noqa: BLE001
+                GLib.idle_add(self._set_error_label, str(exc))
+                return
+            GLib.idle_add(self.refresh)
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _set_error_label(self, message: str) -> bool:
+        self.status_item.set_label(f"BW-ENV error: {message}")
+        self.indicator.set_icon_full("dialog-error", "BW-ENV error")
+        GLib.timeout_add_seconds(5, self.refresh)
+        return False
 
     def refresh(self) -> bool:
         try:

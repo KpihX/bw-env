@@ -278,7 +278,7 @@ while true; do
     
     # 5.1. Monitor Supervision: Ensure the security guard is always alive.
     if [[ -z "$MONITOR_PID" ]] || ! kill -0 "$MONITOR_PID" 2>/dev/null; then
-        log_warn "D-Bus monitor not running. Starting security guard..."
+        log_sys "D-Bus monitor not running. Restarting security guard (auto-healing)..."
         start_dbus_monitor
     fi
 

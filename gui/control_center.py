@@ -156,6 +156,7 @@ class BwEnvBackend:
             capture_output=True,
             text=True,
             check=False,
+            timeout=30,
         )
 
     def status(self) -> dict:

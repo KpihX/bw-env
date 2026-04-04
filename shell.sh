@@ -6,14 +6,14 @@
 
 # bw-env: Unified entry point — delegates to main.sh or handles shell-side ops locally.
 bw-env() {
-    local _load="$HOME/Work/sh/bw-env/load.sh"
-    local _main="$HOME/Work/sh/bw-env/main.sh"
+    local _load="$HOME/Work/sh/bw_env/load.sh"
+    local _main="$HOME/Work/sh/bw_env/main.sh"
     case "$1" in
         # Shell-side only: must run in the current shell process to affect its environment.
         get)
             # Inject secrets into this terminal and register as subscriber.
             # Bypasses load.sh UTILS_DIR auto-detection (unreliable from inside a Zsh function).
-            local _dir="$HOME/Work/sh/bw-env"
+            local _dir="$HOME/Work/sh/bw_env"
             if [[ ! -f "$_dir/utils.sh" || ! -f "$_dir/.env" ]]; then
                 echo "❌ [bw-env] Missing files in $_dir"; return 1
             fi
@@ -30,7 +30,7 @@ bw-env() {
                 register_subscriber
                 # Trap SIGUSR1: auto-refresh when a sync broadcasts from another shell/daemon.
                 # Falls back to manual 'bw-env get' if broadcast was missed.
-                trap '_bw_d="$HOME/Work/sh/bw-env"; source "$_bw_d/utils.sh" 2>/dev/null; source "$_bw_d/.env" 2>/dev/null; [[ -f "$KEYS_REGISTRY" ]] && while read -r _k; do [[ -n "$_k" ]] && unset "$_k"; done < "$KEYS_REGISTRY"; [[ -f "$TEMP_ENV" ]] && { source "$TEMP_ENV"; echo "🔄 [bw-env] Shell [$$] secrets refreshed."; }' SIGUSR1
+                trap '_bw_d="$HOME/Work/sh/bw_env"; source "$_bw_d/utils.sh" 2>/dev/null; source "$_bw_d/.env" 2>/dev/null; [[ -f "$KEYS_REGISTRY" ]] && while read -r _k; do [[ -n "$_k" ]] && unset "$_k"; done < "$KEYS_REGISTRY"; [[ -f "$TEMP_ENV" ]] && { source "$TEMP_ENV"; echo "🔄 [bw-env] Shell [$$] secrets refreshed."; }' SIGUSR1
                 echo "✅ [bw-env] Shell [$$] secrets injected and registered."
             else
                 echo "⚠️  [bw-env] No secrets in RAM. Run 'bw-env unlock' first."
@@ -66,7 +66,7 @@ bw-env() {
             if [[ $ret -eq 0 ]]; then
                 case "$1" in
                     unlock|sync)
-                        local _dir="$HOME/Work/sh/bw-env"
+                        local _dir="$HOME/Work/sh/bw_env"
                         local _already_registered=0
                         if [[ -f "$_dir/utils.sh" && -f "$_dir/.env" ]]; then
                             source "$_dir/utils.sh"
@@ -109,6 +109,6 @@ bw-env() {
 #
 # BW_ENV_LOADED is NOT exported — belt-and-suspenders on top of the PID check.
 if [[ -z "$BW_ENV_LOADED" ]] || [[ "$BW_ENV_LOADED" != "$$" ]]; then
-    [[ -f "$HOME/Work/sh/bw-env/load.sh" ]] && source "$HOME/Work/sh/bw-env/load.sh"
+    [[ -f "$HOME/Work/sh/bw_env/load.sh" ]] && source "$HOME/Work/sh/bw_env/load.sh"
     BW_ENV_LOADED=$$
 fi

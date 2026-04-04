@@ -3,7 +3,7 @@
 # Purpose: Shared shell bootstrap snippet sourced from ~/.kshrc.
 
 # === BW-ENV Shell Integration ===
-[ -f "$HOME/Work/sh/bw-env/shell.sh" ] && source "$HOME/Work/sh/bw-env/shell.sh"
+[ -f "$HOME/Work/sh/bw_env/shell.sh" ] && source "$HOME/Work/sh/bw_env/shell.sh"
 
 # === Node Version Manager (idempotent — safe to source multiple times) ===
 if [ -z "$NVM_LOADED" ]; then

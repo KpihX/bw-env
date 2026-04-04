@@ -4,7 +4,7 @@ After=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=/bin/bash %h/Work/sh/bw-env/gui/tray.sh start
+ExecStart=/bin/bash %h/Work/sh/bw_env/gui/tray.sh start
 Restart=on-failure
 RestartSec=3
 

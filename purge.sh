@@ -10,7 +10,7 @@
 #   ./purge.sh /install/path  — target a specific install dir
 #   ./purge.sh -y /path       — silent + explicit path
 #
-# This script does NOT touch the bw-env source repository (~/Work/sh/bw-env/).
+# This script does NOT touch the bw-env source repository (~/Work/sh/bw_env/).
 # It only removes the installed artefacts (wrapper, services, .env, install dir).
 
 set -euo pipefail
@@ -60,7 +60,7 @@ if [[ -z "$INSTALL_DIR" ]]; then
         fi
     fi
     # Default fallback.
-    INSTALL_DIR="${INSTALL_DIR:-$HOME/.bw-env}"
+    INSTALL_DIR="${INSTALL_DIR:-$HOME/.bw_env}"
 fi
 
 # ── Banner ────────────────────────────────────────────────────────────────────
@@ -77,7 +77,7 @@ info "Systemd dir        : $SYSTEMD_DIR"
 if [[ "$YES_MODE" == "false" ]]; then
     echo
     echo "  This will remove bw-env from your system."
-    echo "  Your source repository (~/Work/sh/bw-env/) will NOT be touched."
+    echo "  Your source repository (~/Work/sh/bw_env/) will NOT be touched."
     echo
     ask_yn "Continue?" "n" || { info "Aborted."; exit 0; }
 fi
@@ -160,10 +160,10 @@ fi
 
 # ── Step 4: Remove shell integration from ~/.kshrc ────────────────────────────
 section "4 · Shell Integration"
-if [[ -f "$KSHRC" ]] && grep -q "bw-env/shell.sh" "$KSHRC" 2>/dev/null; then
+if [[ -f "$KSHRC" ]] && grep -qE "bw.env/shell\.sh" "$KSHRC" 2>/dev/null; then
     # Remove the comment line and the source line as a pair.
     sed -i '/# bw-env shell integration (added by install.sh)/d' "$KSHRC"
-    sed -i '\|bw-env/shell.sh|d' "$KSHRC"
+    sed -i '\|bw.env/shell\.sh|d' "$KSHRC"
     # Also remove any trailing blank lines that were added before the block.
     ok "Shell integration removed from $KSHRC"
     warn "Reload your shell to deactivate the bw-env function: source $KSHRC"
@@ -205,6 +205,6 @@ echo "║  ✅  BW-ENV UNINSTALL COMPLETE                       ║"
 echo "╚══════════════════════════════════════════════════════╝"
 echo
 info "bw-env has been removed from your system."
-info "Source repository ~/Work/sh/bw-env/ was NOT touched."
-info "To reinstall: cd ~/Work/sh/bw-env && ./install.sh"
+info "Source repository ~/Work/sh/bw_env/ was NOT touched."
+info "To reinstall: cd ~/Work/sh/bw_env && ./install.sh"
 echo

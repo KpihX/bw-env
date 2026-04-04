@@ -5,7 +5,7 @@
 #
 # Usage:
 #   ./install.sh              — interactive (prompts for path, item ID, GUI choice)
-#   ./install.sh -y           — default install ($HOME/.bw-env, skips all y/n prompts)
+#   ./install.sh -y           — default install ($HOME/.bw_env, skips all y/n prompts)
 #   ./install.sh /some/base   — install to /some/base/paths/bw-env (interactive for the rest)
 #   ./install.sh -y /some/base — full-default install to /some/base/paths/bw-env
 #
@@ -125,6 +125,36 @@ else
     ok "bw CLI installed: $(command -v bw)"
 fi
 
+# ── Step 1.5: Check Bitwarden authentication ──────────────────────────────────
+section "1.5 · Bitwarden Authentication"
+_bw_state=$(bw status 2>/dev/null | grep -o '"status":"[^"]*"' | cut -d'"' -f4)
+if [[ "$_bw_state" == "unauthenticated" ]]; then
+    warn "Bitwarden CLI is not logged in."
+    info "You must authenticate before bw-env can unlock."
+    info ""
+    info "  1. Point the CLI to your Vaultwarden server (only once):"
+    info "       bw config server https://your-vaultwarden-url"
+    info "  2. Log in:"
+    info "       bw login"
+    info ""
+    if [[ "$YES_MODE" == "false" ]]; then
+        info "Complete the steps above in another terminal, then come back."
+        ask_yn "Press Enter once logged in (or skip to configure later)" "y" || true
+        _bw_state=$(bw status 2>/dev/null | grep -o '"status":"[^"]*"' | cut -d'"' -f4)
+        if [[ "$_bw_state" == "unauthenticated" ]]; then
+            warn "Still unauthenticated — continuing install. Run 'bw-env unlock' after logging in."
+        else
+            ok "Bitwarden CLI authenticated (status: $_bw_state)"
+        fi
+    else
+        warn "Running in -y mode — skipping login check. Run 'bw-env unlock' after logging in."
+    fi
+elif [[ -n "$_bw_state" ]]; then
+    ok "Bitwarden CLI authenticated (status: $_bw_state)"
+else
+    warn "Could not determine bw authentication status — continuing anyway."
+fi
+
 # ── Step 2: Check other required dependencies ─────────────────────────────────
 section "2 · Dependencies"
 _missing=0
@@ -140,20 +170,20 @@ ok "All required dependencies present."
 # ── Step 3: Determine install directory ──────────────────────────────────────
 section "3 · Install Location"
 if [[ -n "$BASE_PATH" ]]; then
-    INSTALL_DIR="$BASE_PATH/paths/bw-env"
+    INSTALL_DIR="$BASE_PATH/paths/bw_env"
     info "Base path provided → installing to: $INSTALL_DIR"
 elif [[ "$YES_MODE" == "true" ]]; then
-    INSTALL_DIR="$HOME/.bw-env"
+    INSTALL_DIR="$HOME/.bw_env"
     info "Default install path: $INSTALL_DIR"
 else
     echo "  Where should bw-env be installed?"
-    echo "  • Press Enter for default: $HOME/.bw-env"
-    echo "  • Or enter a base path (bw-env will be placed in <path>/paths/bw-env)"
+    echo "  • Press Enter for default: $HOME/.bw_env"
+    echo "  • Or enter a base path (bw-env will be placed in <path>/paths/bw_env)"
     read -r -p "  Path: " _user_path
     if [[ -n "$_user_path" ]]; then
-        INSTALL_DIR="$_user_path/paths/bw-env"
+        INSTALL_DIR="$_user_path/paths/bw_env"
     else
-        INSTALL_DIR="$HOME/.bw-env"
+        INSTALL_DIR="$HOME/.bw_env"
     fi
 fi
 info "Install directory: $INSTALL_DIR"
@@ -273,14 +303,14 @@ _shell_line="[ -f \"$INSTALL_DIR/shell.sh\" ] && source \"$INSTALL_DIR/shell.sh\
 _add_shell=false
 
 if [[ -f "$KSHRC" ]]; then
-    if grep -q "bw-env/shell.sh" "$KSHRC" 2>/dev/null; then
+    if grep -qE "bw.env/shell\.sh" "$KSHRC" 2>/dev/null; then
         warn "Shell integration already present in $KSHRC."
         if [[ "$YES_MODE" == "true" ]]; then
             warn "Skipping (use manual edit to update the path if needed)."
         else
             if ask_yn "Replace existing bw-env integration line with new path?" "n"; then
                 # Remove old line and re-add.
-                sed -i '\|bw-env/shell.sh|d' "$KSHRC"
+                sed -i '\|bw.env/shell\.sh|d' "$KSHRC"
                 _add_shell=true
             fi
         fi

@@ -49,7 +49,7 @@ The system is built on the principle that **nothing is trusted by default**, and
 ### 0. Automated Install (Recommended)
 
 ```bash
-cd ~/Work/sh/bw-env
+cd ~/Work/sh/bw_env
 ./install.sh          # interactive: prompts for install path, Bitwarden item ID, GUI tray
 ./install.sh -y       # silent: all defaults, no prompts
 ```
@@ -80,7 +80,7 @@ Create a global wrapper to access `bw-env` from any script or terminal:
 # Create the binary wrapper
 cat <<EOF > ~/.local/bin/bw-env
 #!/bin/bash
-exec bash \$HOME/Work/sh/bw-env/main.sh "\$@"
+exec bash \$HOME/Work/sh/bw_env/main.sh "\$@"
 EOF
 
 # Make it executable
@@ -97,11 +97,11 @@ chmod +x ~/.local/bin/bw-env
 Recommended integration:
 
 ```bash
-[ -f "$HOME/Work/sh/bw-env/profile.sh" ] && source "$HOME/Work/sh/bw-env/profile.sh"
+[ -f "$HOME/Work/sh/bw_env/profile.sh" ] && source "$HOME/Work/sh/bw_env/profile.sh"
 ```
 
 #### 3. Configuration (`.env`)
-The system is 100% flexible. All user-facing runtime settings are centralized in `~/Work/sh/bw-env/.env`. A template is provided in `.env.example`.
+The system is 100% flexible. All user-facing runtime settings are centralized in `~/Work/sh/bw_env/.env`. A template is provided in `.env.example`.
 
 The recommended read/write interface is now the CLI itself:
 
@@ -133,7 +133,7 @@ Install the user service for proactive security:
 2.  **Configuration**:
     ```ini
     [Service]
-    ExecStart=/bin/bash %h/Work/sh/bw-env/sync-daemon.sh
+    ExecStart=/bin/bash %h/Work/sh/bw_env/sync-daemon.sh
     Restart=on-failure
     ```
 3.  **Enable**: `systemctl --user enable --now bw-env-sync.service`
@@ -167,7 +167,7 @@ Typical installation:
 
 ```bash
 mkdir -p ~/.config/systemd/user
-cp ~/Work/sh/bw-env/gui/bw-env-tray.service ~/.config/systemd/user/
+cp ~/Work/sh/bw_env/gui/bw-env-tray.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now bw-env-tray.service
 ```
@@ -260,7 +260,7 @@ BW-ENV uses **Journald** for maximum transparency.
 - **Systemd Status**: `systemctl --user status bw-env-sync.service`.
 - **Tray Status**: `ps -fp "$(cat /dev/shm/bw-env-tray-$USER.pid 2>/dev/null)"`.
 - **Bitwarden CLI Status**: `bw status`.
-- **Trace Execution**: `bash -x ~/Work/sh/bw-env/main.sh [command]`.
+- **Trace Execution**: `bash -x ~/Work/sh/bw_env/main.sh [command]`.
 
 ### 📊 Resource Profile
 
