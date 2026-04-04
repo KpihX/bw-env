@@ -46,7 +46,34 @@ The system is built on the principle that **nothing is trusted by default**, and
 
 ## 🚀 2. Installation & Setup Guide
 
-### 1. Binary Installation
+### 0. Automated Install (Recommended)
+
+```bash
+cd ~/Work/sh/bw-env
+./install.sh          # interactive: prompts for install path, Bitwarden item ID, GUI tray
+./install.sh -y       # silent: all defaults, no prompts
+```
+
+`install.sh` covers all steps automatically: bw CLI check/install, dependency check, file
+deployment, `.env` configuration, shell integration (`~/.kshrc`), and systemd services
+(sync daemon + optional GUI tray).
+
+To uninstall:
+
+```bash
+./purge.sh            # interactive (confirms before each destructive step)
+./purge.sh -y         # silent: full removal, no prompts
+```
+
+The `Makefile` also exposes `make install`, `make install-y`, `make purge`, `make purge-y`.
+
+---
+
+### Manual Install (Custom Paths)
+
+If you need to install to a non-standard location, follow these steps manually.
+
+#### 1. Binary Wrapper
 Create a global wrapper to access `bw-env` from any script or terminal:
 
 ```bash
@@ -60,7 +87,7 @@ EOF
 chmod +x ~/.local/bin/bw-env
 ```
 
-### 2. Shell Integration
+#### 2. Shell Integration
 `bw-env` now ships a dedicated shell bootstrap bundle:
 
 - `shell.sh`: the `bw-env` shell wrapper plus shell-side commands (`get`, `drop`)
@@ -73,7 +100,7 @@ Recommended integration:
 [ -f "$HOME/Work/sh/bw-env/profile.sh" ] && source "$HOME/Work/sh/bw-env/profile.sh"
 ```
 
-### 3. Configuration (`.env`)
+#### 3. Configuration (`.env`)
 The system is 100% flexible. All user-facing runtime settings are centralized in `~/Work/sh/bw-env/.env`. A template is provided in `.env.example`.
 
 The recommended read/write interface is now the CLI itself:
@@ -99,7 +126,7 @@ Relevant GUI-facing settings include:
 - `LOAD_WAIT_MAX`
 - `LOAD_WAIT_STEP`
 
-### 4. Background Sync & Auto-Lock (Systemd)
+#### 4. Background Sync & Auto-Lock (Systemd)
 Install the user service for proactive security:
 
 1.  **Create unit file**: `~/.config/systemd/user/bw-env-sync.service`
@@ -111,7 +138,7 @@ Install the user service for proactive security:
     ```
 3.  **Enable**: `systemctl --user enable --now bw-env-sync.service`
 
-### 5. Tray & Control Center
+#### 5. Tray & Control Center
 BW-ENV now includes:
 
 - `bw-env gui`: opens the graphical control center
@@ -234,6 +261,23 @@ BW-ENV uses **Journald** for maximum transparency.
 - **Tray Status**: `ps -fp "$(cat /dev/shm/bw-env-tray-$USER.pid 2>/dev/null)"`.
 - **Bitwarden CLI Status**: `bw status`.
 - **Trace Execution**: `bash -x ~/Work/sh/bw-env/main.sh [command]`.
+
+### 📊 Resource Profile
+
+The tray baseline is ~180MB RSS (Python + GTK + AppIndicator — stack minimum, not reducible
+without changing the GUI stack). Hot-path operations are designed to be lightweight:
+
+| Operation | Cost | Method |
+| :--- | :--- | :--- |
+| `status --json` | ~226ms | Direct `/dev/shm` file reads — no Node.js |
+| `unlock` idempotency check | ~1ms | `[[ -f $TEMP_ENV ]] && [[ -f $SESSION_FILE ]]` |
+| `lock` idempotency check | ~1ms | same file checks |
+| Tray poll | 30s interval, 10s timeout | `subprocess.run(..., timeout=10)` |
+
+> **`bw status` (Node.js, ~4s cold start) is intentionally avoided in all hot paths.**
+> The only remaining call is the unauthenticated guard before `bw unlock --raw` — user-initiated
+> and rare. If you see `bw` Node.js processes accumulating, restart the tray:
+> `systemctl --user restart bw-env-tray.service`
 
 ### 🔴 Recovery Runbook
 
